@@ -110,6 +110,41 @@ impl fmt::Display for InputSource {
 }
 
 // ---------------------------------------------------------------------------
+// Power mode mapping (VCP feature 0xD6)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PowerMode {
+    On,
+    Standby,
+    Suspend,
+    Off,
+}
+
+impl PowerMode {
+    /// DDC/CI VCP value (feature 0xD6) for this power mode.
+    pub fn vcp_value(self) -> u16 {
+        match self {
+            PowerMode::On => 0x01,
+            PowerMode::Standby => 0x02,
+            PowerMode::Suspend => 0x03,
+            PowerMode::Off => 0x04,
+        }
+    }
+}
+
+impl fmt::Display for PowerMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PowerMode::On => write!(f, "On"),
+            PowerMode::Standby => write!(f, "Standby"),
+            PowerMode::Suspend => write!(f, "Suspend"),
+            PowerMode::Off => write!(f, "Off"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Monitor information
 // ---------------------------------------------------------------------------
 
@@ -129,8 +164,6 @@ pub struct MonitorInfo {
     pub name: String,
     /// Whether this monitor is the primary display.
     pub is_primary: bool,
-    /// Scale factor.
-    pub scale_factor: f32,
 }
 
 impl fmt::Display for MonitorInfo {
@@ -191,7 +224,6 @@ pub fn detect_monitors() -> Result<Vec<MonitorInfo>> {
                 height: info.height,
                 name: format!("Monitor {}", id),
                 is_primary: info.is_primary,
-                scale_factor: info.scale_factor,
             });
         } else {
             result.push(MonitorInfo {
@@ -202,7 +234,6 @@ pub fn detect_monitors() -> Result<Vec<MonitorInfo>> {
                 height: 0,
                 name: format!("Monitor {}", id),
                 is_primary: false,
-                scale_factor: 1.0,
             });
         }
     }
@@ -238,6 +269,16 @@ pub fn set_input_source(monitor_id: u32, source: InputSource) -> Result<()> {
     let idx = validated_index(monitor_id, monitors.len())?;
     let mon = &mut monitors[idx];
     mon.set_vcp_feature(VCP_INPUT_SOURCE, source.vcp_value())
+        .map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
+    Ok(())
+}
+
+/// Set the power mode for the given 1-indexed monitor.
+pub fn set_power_mode(monitor_id: u32, mode: PowerMode) -> Result<()> {
+    let mut monitors = get_ddc_monitors()?;
+    let idx = validated_index(monitor_id, monitors.len())?;
+    let mon = &mut monitors[idx];
+    mon.set_vcp_feature(VCP_POWER_MODE, mode.vcp_value())
         .map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
     Ok(())
 }

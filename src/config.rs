@@ -1,4 +1,4 @@
-use crate::ddc::InputSource;
+use crate::ddc::{InputSource, PowerMode};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -86,6 +86,13 @@ pub struct ContrastBinding {
     pub hotkey: HotkeyBinding,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerModeBinding {
+    pub monitor_id: u32,
+    pub power_mode: PowerMode,
+    pub hotkey: HotkeyBinding,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StepDirection {
     Up,
@@ -101,6 +108,8 @@ pub struct HotkeyConfig {
     pub input_switch_bindings: Vec<InputSwitchBinding>,
     pub brightness_bindings: Vec<BrightnessBinding>,
     pub contrast_bindings: Vec<ContrastBinding>,
+    #[serde(default)]
+    pub power_mode_bindings: Vec<PowerModeBinding>,
     /// Step size for brightness hotkey increments/decrements.
     pub brightness_step: u16,
     /// Step size for contrast hotkey increments/decrements.
@@ -113,6 +122,7 @@ impl Default for HotkeyConfig {
             input_switch_bindings: Vec::new(),
             brightness_bindings: Vec::new(),
             contrast_bindings: Vec::new(),
+            power_mode_bindings: Vec::new(),
             brightness_step: 10,
             contrast_step: 10,
         }
@@ -207,6 +217,10 @@ pub enum HotkeyAction {
     ContrastDown {
         monitor_id: u32,
     },
+    SetPowerMode {
+        monitor_id: u32,
+        power_mode: PowerMode,
+    },
 }
 
 /// Build a mapping from global-hotkey ID → action from the loaded config.
@@ -246,6 +260,16 @@ pub fn build_hotkey_map(config: &HotkeyConfig) -> HashMap<u32, (HotKey, HotkeyAc
                 StepDirection::Down => HotkeyAction::ContrastDown {
                     monitor_id: binding.monitor_id,
                 },
+            };
+            map.insert(hk.id(), (hk, action));
+        }
+    }
+
+    for binding in &config.power_mode_bindings {
+        if let Some(hk) = binding.hotkey.to_hotkey() {
+            let action = HotkeyAction::SetPowerMode {
+                monitor_id: binding.monitor_id,
+                power_mode: binding.power_mode,
             };
             map.insert(hk.id(), (hk, action));
         }

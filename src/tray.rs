@@ -71,6 +71,9 @@ impl SystemTray {
             .with_tooltip("Windows Display Manager")
             .with_icon(create_tray_icon()?)
             .with_menu(Box::new(menu))
+            // Only show the context menu on right-click; left/double click is
+            // reserved for showing the window.
+            .with_menu_on_left_click(false)
             .build()?;
 
         // Set up event channels

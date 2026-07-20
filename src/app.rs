@@ -1,8 +1,8 @@
 use crate::config::{
     AppConfig, HotkeyAction, HotkeyBinding, BrightnessBinding, ContrastBinding,
-    InputSwitchBinding, StepDirection,
+    InputSwitchBinding, PowerModeBinding, StepDirection,
 };
-use crate::ddc::{self, InputSource, MonitorInfo, MonitorState};
+use crate::ddc::{self, InputSource, MonitorInfo, MonitorState, PowerMode};
 use crate::hotkeys::{self, HotkeyManager};
 use crate::tray::{SystemTray, TrayMessage, TrayStream};
 use cosmic::app::Application;
@@ -38,6 +38,7 @@ pub enum Page {
     Monitor(u32), // 1-indexed monitor ID
     Hotkeys,
     Settings,
+    About,
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,7 @@ pub enum Message {
     BrightnessApplied(u32, u16),
     ContrastApplied(u32, u16),
     InputSourceApplied(u32, InputSource),
+    PowerModeApplied(u32, PowerMode),
     // Debounced slider changes
     BrightnessSliderChanged(u32, u16),
     ContrastSliderChanged(u32, u16),
@@ -68,10 +70,12 @@ pub enum Message {
     StartRecordingBrightness(u32, StepDirection),
     StartRecordingContrast(u32, StepDirection),
     StartRecordingInputSwitch(u32, InputSource),
+    StartRecordingPowerMode(u32, PowerMode),
     CancelRecording,
     KeyPressed(Modifiers, Key),
     // Hotkey management
     RemoveHotkeyBinding(usize, BindingCategory),
+    SelectAddBindingType(usize),
     SaveConfig,
     // System tray
     Tray(TrayMessage),
@@ -79,6 +83,8 @@ pub enum Message {
     HideWindow,
     /// A window surface was closed (used to reset the tracked main window)
     WindowClosed(window::Id),
+    /// Open a URL from the About page in the default browser
+    OpenUrl(String),
     // Errors
     Error(String),
 }
@@ -88,6 +94,7 @@ pub enum BindingCategory {
     InputSwitch,
     Brightness,
     Contrast,
+    PowerMode,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +131,15 @@ pub enum RecordingState {
         win: bool,
         key: String,
     },
+    RecordingPowerMode {
+        monitor_id: u32,
+        power_mode: PowerMode,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        win: bool,
+        key: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +159,8 @@ pub struct AppModel {
     // Debounce state for sliders
     pending_brightness: Option<(u32, u16)>,
     pending_contrast: Option<(u32, u16)>,
+    // Selected action type in the "add hotkey" dropdown (0=brightness, 1=contrast, 2=input)
+    add_binding_type: usize,
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
 }
@@ -270,7 +288,8 @@ impl cosmic::Application for AppModel {
         let about = widget::about::About::default()
             .name("Windows Display Manager")
             .icon(widget::icon::from_svg_bytes(APP_ICON))
-            .version(env!("CARGO_PKG_VERSION"));
+            .version(env!("CARGO_PKG_VERSION"))
+            .comments("DDC/CI monitor control with global hotkeys.");
 
         // Set up system tray
         let tray = match SystemTray::new() {
@@ -296,6 +315,7 @@ impl cosmic::Application for AppModel {
             about,
             pending_brightness: None,
             pending_contrast: None,
+            add_binding_type: 0,
             tray,
         };
 
@@ -429,6 +449,11 @@ impl cosmic::Application for AppModel {
                     .insert()
                     .text("Settings")
                     .data::<Page>(Page::Settings);
+                // About page
+                self.nav
+                    .insert()
+                    .text("About")
+                    .data::<Page>(Page::About);
 
                 // Activate first monitor
                 self.nav.activate_position(0);
@@ -604,6 +629,8 @@ impl cosmic::Application for AppModel {
 
             Message::InputSourceApplied(_monitor_id, _source) => {}
 
+            Message::PowerModeApplied(_monitor_id, _power_mode) => {}
+
             // -- Hotkey actions ---------------------------------------------
             Message::HotkeyTriggered(action) => {
                 return self.handle_hotkey_action(action);
@@ -640,6 +667,19 @@ impl cosmic::Application for AppModel {
                 self.recording_state = RecordingState::RecordingInputSwitch {
                     monitor_id,
                     input_source,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    win: false,
+                    key: String::new(),
+                };
+                self.status_message = "Recording hotkey... Press modifiers and key".into();
+            }
+
+            Message::StartRecordingPowerMode(monitor_id, power_mode) => {
+                self.recording_state = RecordingState::RecordingPowerMode {
+                    monitor_id,
+                    power_mode,
                     ctrl: false,
                     alt: false,
                     shift: false,
@@ -756,8 +796,41 @@ impl cosmic::Application for AppModel {
                                 .unwrap_or_else(|| Arc::new(HashMap::new()));
                         }
                     }
+                    RecordingState::RecordingPowerMode { monitor_id, power_mode, .. } => {
+                        self.config.hotkeys.power_mode_bindings.push(PowerModeBinding {
+                            monitor_id: *monitor_id,
+                            power_mode: *power_mode,
+                            hotkey: HotkeyBinding {
+                                ctrl,
+                                alt,
+                                shift,
+                                win,
+                                key: key_string.clone(),
+                            },
+                        });
+                        self.status_message = format!("Power mode hotkey added: {}. Remember to save configuration.",
+                            format_hotkey(ctrl, alt, shift, win, &key_string));
+                        self.recording_state = RecordingState::NotRecording;
+
+                        // Re-register hotkeys immediately
+                        if let Some(ref mut manager) = self.hotkey_manager {
+                            manager.update(&self.config);
+                            self.hotkey_action_map = manager.action_map();
+                        } else {
+                            self.hotkey_manager = HotkeyManager::new(&self.config);
+                            self.hotkey_action_map = self
+                                .hotkey_manager
+                                .as_ref()
+                                .map(|m| m.action_map())
+                                .unwrap_or_else(|| Arc::new(HashMap::new()));
+                        }
+                    }
                     RecordingState::NotRecording => {}
                 }
+            }
+
+            Message::SelectAddBindingType(idx) => {
+                self.add_binding_type = idx;
             }
 
             Message::RemoveHotkeyBinding(idx, category) => {
@@ -775,6 +848,11 @@ impl cosmic::Application for AppModel {
                     BindingCategory::Contrast => {
                         if idx < self.config.hotkeys.contrast_bindings.len() {
                             self.config.hotkeys.contrast_bindings.remove(idx);
+                        }
+                    }
+                    BindingCategory::PowerMode => {
+                        if idx < self.config.hotkeys.power_mode_bindings.len() {
+                            self.config.hotkeys.power_mode_bindings.remove(idx);
                         }
                     }
                 }
@@ -875,6 +953,15 @@ impl cosmic::Application for AppModel {
                 }
             }
 
+            Message::OpenUrl(url) => {
+                if let Err(e) = std::process::Command::new("rundll32.exe")
+                    .args(["url.dll,FileProtocolHandler", &url])
+                    .spawn()
+                {
+                    log::warn!("Failed to open URL {url}: {e}");
+                }
+            }
+
             // -- Errors / misc ----------------------------------------------
             Message::Error(msg) => {
                 log::error!("{msg}");
@@ -904,6 +991,7 @@ impl cosmic::Application for AppModel {
             Page::Monitor(monitor_id) => self.view_monitor(monitor_id),
             Page::Hotkeys => self.view_hotkeys(),
             Page::Settings => self.view_settings(),
+            Page::About => self.view_about(),
         };
 
         // Wrap in a container with status bar at the bottom
@@ -1167,12 +1255,56 @@ impl AppModel {
             .title("Input Switch Hotkeys")
             .add(input_items);
 
+        // --- Power mode bindings ---
+        let mut power_items = widget::column::with_capacity(
+            self.config.hotkeys.power_mode_bindings.len() + 1,
+        )
+        .spacing(4);
+
+        for (i, binding) in self.config.hotkeys.power_mode_bindings.iter().enumerate() {
+            let label = format!(
+                "Monitor {} Power -> {} : {}",
+                binding.monitor_id, binding.power_mode, binding.hotkey
+            );
+            power_items = power_items.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body(label).width(Length::Fill))
+                    .push(
+                        widget::button::destructive("Remove")
+                            .on_press(Message::RemoveHotkeyBinding(
+                                i,
+                                BindingCategory::PowerMode,
+                            )),
+                    )
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+            );
+        }
+
+        let power_section = cosmic::widget::settings::section()
+            .title("Power Mode Hotkeys")
+            .add(power_items);
+
         // --- Hotkey recording UI or Quick-add buttons ---
         let add_section = match &self.recording_state {
             RecordingState::NotRecording => {
-                // Show add buttons for each monitor
-                let mut add_buttons = widget::column::with_capacity(self.monitors.len())
-                    .spacing(space_s);
+                // Dropdown to choose which kind of hotkey to add.
+                static ADD_TYPE_LABELS: &[&str] =
+                    &["Brightness", "Contrast", "Input Switching", "Power Mode"];
+                let type_row = widget::row::with_capacity(2)
+                    .push(widget::text::body("Binding type").width(Length::FillPortion(2)))
+                    .push(widget::dropdown(
+                        ADD_TYPE_LABELS,
+                        Some(self.add_binding_type),
+                        Message::SelectAddBindingType,
+                    ))
+                    .spacing(space_s)
+                    .align_y(Alignment::Center);
+
+                // Per-monitor controls for the selected binding type.
+                let mut add_buttons =
+                    widget::column::with_capacity(self.monitors.len() + 1).spacing(space_s);
+                add_buttons = add_buttons.push(type_row);
 
                 for mon in &self.monitors {
                     let mid = mon.info.id;
@@ -1181,44 +1313,71 @@ impl AppModel {
                     } else {
                         mon.info.name.clone()
                     };
-                    let row = widget::row::with_capacity(5)
-                        .push(widget::text::body(monitor_label).width(Length::FillPortion(2)))
-                        .push(
-                            widget::button::standard("+ Bright Up")
-                                .on_press(Message::StartRecordingBrightness(mid, StepDirection::Up)),
-                        )
-                        .push(
-                            widget::button::standard("+ Bright Down")
-                                .on_press(Message::StartRecordingBrightness(mid, StepDirection::Down)),
-                        )
-                        .push(
-                            widget::button::standard("+ Contrast Up")
-                                .on_press(Message::StartRecordingContrast(mid, StepDirection::Up)),
-                        )
-                        .push(
-                            widget::button::standard("+ Contrast Down")
-                                .on_press(Message::StartRecordingContrast(mid, StepDirection::Down)),
-                        )
-                        .spacing(space_s)
-                        .align_y(Alignment::Center);
 
-                    add_buttons = add_buttons.push(row);
-                    
-                    // Add input source buttons for this monitor
-                    let input_row = widget::row::with_capacity(11)
-                        .push(widget::text::body("").width(Length::FillPortion(2)))
-                        .push(widget::button::standard("+ HDMI1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Hdmi1)))
-                        .push(widget::button::standard("+ HDMI2").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Hdmi2)))
-                        .push(widget::button::standard("+ DP1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Dp1)))
-                        .push(widget::button::standard("+ DP2").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Dp2)))
-                        .push(widget::button::standard("+ USB-C1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::UsbC1)))
+                    let controls = match self.add_binding_type {
+                        0 => widget::row::with_capacity(2)
+                            .push(widget::button::standard("+ Up").on_press(
+                                Message::StartRecordingBrightness(mid, StepDirection::Up),
+                            ))
+                            .push(widget::button::standard("+ Down").on_press(
+                                Message::StartRecordingBrightness(mid, StepDirection::Down),
+                            ))
+                            .spacing(space_s)
+                            .align_y(Alignment::Center),
+                        1 => widget::row::with_capacity(2)
+                            .push(widget::button::standard("+ Up").on_press(
+                                Message::StartRecordingContrast(mid, StepDirection::Up),
+                            ))
+                            .push(widget::button::standard("+ Down").on_press(
+                                Message::StartRecordingContrast(mid, StepDirection::Down),
+                            ))
+                            .spacing(space_s)
+                            .align_y(Alignment::Center),
+                        2 => widget::row::with_capacity(5)
+                            .push(widget::button::standard("+ HDMI1").on_press(
+                                Message::StartRecordingInputSwitch(mid, InputSource::Hdmi1),
+                            ))
+                            .push(widget::button::standard("+ HDMI2").on_press(
+                                Message::StartRecordingInputSwitch(mid, InputSource::Hdmi2),
+                            ))
+                            .push(widget::button::standard("+ DP1").on_press(
+                                Message::StartRecordingInputSwitch(mid, InputSource::Dp1),
+                            ))
+                            .push(widget::button::standard("+ DP2").on_press(
+                                Message::StartRecordingInputSwitch(mid, InputSource::Dp2),
+                            ))
+                            .push(widget::button::standard("+ USB-C1").on_press(
+                                Message::StartRecordingInputSwitch(mid, InputSource::UsbC1),
+                            ))
+                            .spacing(space_s)
+                            .align_y(Alignment::Center),
+                        _ => widget::row::with_capacity(4)
+                            .push(widget::button::standard("+ On").on_press(
+                                Message::StartRecordingPowerMode(mid, PowerMode::On),
+                            ))
+                            .push(widget::button::standard("+ Standby").on_press(
+                                Message::StartRecordingPowerMode(mid, PowerMode::Standby),
+                            ))
+                            .push(widget::button::standard("+ Suspend").on_press(
+                                Message::StartRecordingPowerMode(mid, PowerMode::Suspend),
+                            ))
+                            .push(widget::button::standard("+ Off").on_press(
+                                Message::StartRecordingPowerMode(mid, PowerMode::Off),
+                            ))
+                            .spacing(space_s)
+                            .align_y(Alignment::Center),
+                    };
+
+                    let row = widget::row::with_capacity(2)
+                        .push(widget::text::body(monitor_label).width(Length::FillPortion(2)))
+                        .push(controls)
                         .spacing(space_s)
                         .align_y(Alignment::Center);
-                    add_buttons = add_buttons.push(input_row);
+                    add_buttons = add_buttons.push(row);
                 }
 
                 cosmic::widget::settings::section()
-                    .title("Add Hotkey Bindings")
+                    .title("Add Hotkey Binding")
                     .add(add_buttons)
             }
             recording_state => {
@@ -1233,12 +1392,13 @@ impl AppModel {
                 .on_press(Message::SaveConfig),
         );
 
-        let content = widget::column::with_capacity(7)
+        let content = widget::column::with_capacity(8)
             .push(header)
             .push(description)
             .push(brightness_section)
             .push(contrast_section)
             .push(input_section)
+            .push(power_section)
             .push(add_section)
             .push(save_row)
             .spacing(space_s)
@@ -1305,6 +1465,16 @@ impl AppModel {
             .into()
     }
 
+    /// View for the About page.
+    fn view_about(&self) -> Element<'_, Message> {
+        widget::scrollable(
+            cosmic::widget::about(&self.about, |url| Message::OpenUrl(url.to_owned())),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
     /// View for the hotkey recording panel.
     fn view_recording_panel(&self, recording_state: &RecordingState, space_s: u16) -> cosmic::widget::settings::Section<'_, Message> {
         let (action_desc, _monitor_id, ctrl, alt, shift, win, key) = match recording_state {
@@ -1324,6 +1494,9 @@ impl AppModel {
             }
             RecordingState::RecordingInputSwitch { monitor_id, input_source, ctrl, alt, shift, win, key } => {
                 (format!("Monitor {} Switch to {}", monitor_id, input_source), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
+            }
+            RecordingState::RecordingPowerMode { monitor_id, power_mode, ctrl, alt, shift, win, key } => {
+                (format!("Monitor {} Power {}", monitor_id, power_mode), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
             }
             RecordingState::NotRecording => {
                 return cosmic::widget::settings::section()
@@ -1448,6 +1621,22 @@ impl AppModel {
                     return self.update(Message::SetContrast(monitor_id, new_val));
                 }
                 cosmic::app::Task::none()
+            }
+
+            HotkeyAction::SetPowerMode { monitor_id, power_mode } => {
+                cosmic::app::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            ddc::set_power_mode(monitor_id, power_mode)
+                        })
+                        .await
+                    },
+                    move |result| match result {
+                        Ok(Ok(())) => cosmic::Action::App(Message::PowerModeApplied(monitor_id, power_mode)),
+                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Power mode error: {e}"))),
+                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                    },
+                )
             }
         }
     }

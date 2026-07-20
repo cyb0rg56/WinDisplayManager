@@ -21,8 +21,6 @@ fn main() -> cosmic::iced::Result {
         .antialiasing(false)
         // Don't exit when the window is closed — keep running in the tray
         .exit_on_close(false)
-        // Allow the app to run without a main window (tray-only mode)
-        .no_main_window(true)
         .size_limits(
             cosmic::iced::Limits::NONE
                 .min_width(600.0)
