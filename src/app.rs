@@ -77,6 +77,8 @@ pub enum Message {
     Tray(TrayMessage),
     /// Hide window (close-to-tray)
     HideWindow,
+    /// A window surface was closed (used to reset the tracked main window)
+    WindowClosed(window::Id),
     // Errors
     Error(String),
 }
@@ -192,7 +194,6 @@ fn key_to_string(key: &Key) -> String {
                 Named::PageDown => "PageDown",
                 Named::Insert => "Insert",
                 Named::Delete => "Delete",
-                Named::Space => "Space",
                 Named::Enter => "Enter",
                 Named::Escape => "Escape",
                 Named::Backspace => "Backspace",
@@ -202,7 +203,9 @@ fn key_to_string(key: &Key) -> String {
         }
         Key::Character(c) => {
             let ch = c.chars().next().unwrap_or('?');
-            if ch.is_ascii_alphabetic() {
+            if ch == ' ' {
+                "Space".to_string()
+            } else if ch.is_ascii_alphabetic() {
                 format!("Key{}", ch.to_uppercase())
             } else if ch.is_ascii_digit() {
                 format!("Digit{}", ch)
@@ -363,13 +366,22 @@ impl cosmic::Application for AppModel {
         // System tray subscription
         if let Some((_, ref tray_stream)) = self.tray {
             subs.push(
-                Subscription::run_with_id(
-                    "system-tray",
-                    tray_stream.clone().into_subscription_stream(),
-                )
-                .map(Message::Tray),
+                tray_stream.clone().subscription().map(Message::Tray),
             );
         }
+
+        // Track window close so the tray can reopen a fresh window later.
+        // The tracked main window id must only be cleared after the surface is
+        // actually gone (see the WindowClosed handler in `update`).
+        subs.push(
+            event::listen_with(|event, _status, id| {
+                if let Event::Window(window::Event::Closed) = event {
+                    Some(Message::WindowClosed(id))
+                } else {
+                    None
+                }
+            })
+        );
 
         Subscription::batch(subs)
     }
@@ -823,6 +835,16 @@ impl cosmic::Application for AppModel {
                 }
             }
 
+            // -- Window surface closed --------------------------------------
+            // Reset the tracked main window once its surface is gone so the
+            // tray can open a fresh window on the next `ShowWindow`.
+            Message::WindowClosed(id) => {
+                if self.core.main_window_id() == Some(id) {
+                    log::info!("Main window closed; clearing tracked window id");
+                    self.core_mut().set_main_window_id(None);
+                }
+            }
+
             // -- System tray ------------------------------------------------
             Message::Tray(tray_msg) => {
                 match tray_msg {
@@ -832,9 +854,13 @@ impl cosmic::Application for AppModel {
                             // Window still exists — try to focus it
                             return window::gain_focus(id);
                         } else {
-                            // Window was closed — open a new one
+                            // Window was closed — open a new one.
+                            // `decorations: false` lets COSMIC draw its own header
+                            // bar (client-side decorations) without the native
+                            // Windows title bar appearing as well.
                             let (new_id, open_task) = window::open(window::Settings {
                                 min_size: Some(cosmic::iced::Size::new(600.0, 400.0)),
+                                decorations: false,
                                 ..window::Settings::default()
                             });
                             self.core_mut().set_main_window_id(Some(new_id));

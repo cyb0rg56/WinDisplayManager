@@ -1,10 +1,10 @@
 use crate::config::{build_hotkey_map, AppConfig, HotkeyAction};
-use cosmic::iced::Subscription;
-use cosmic::iced_futures;
-use futures_util::SinkExt;
+use cosmic::iced::futures::SinkExt;
+use cosmic::iced::{stream, Subscription};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +89,19 @@ impl HotkeyManager {
 // Subscription – polls global hotkey events and emits HotkeyAction messages
 // ---------------------------------------------------------------------------
 
+/// Identity/data wrapper for the hotkey subscription. Hashing the set of
+/// registered hotkey ids ensures the subscription restarts when the bindings
+/// change.
+struct HotkeyData(Arc<HashMap<u32, HotkeyAction>>);
+
+impl Hash for HotkeyData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut ids: Vec<u32> = self.0.keys().copied().collect();
+        ids.sort_unstable();
+        ids.hash(state);
+    }
+}
+
 /// Create an iced `Subscription` that polls global hotkey events.
 ///
 /// The subscription emits `HotkeyAction` values whenever a registered hotkey
@@ -97,11 +110,11 @@ impl HotkeyManager {
 pub fn hotkey_subscription(
     action_map: Arc<HashMap<u32, HotkeyAction>>,
 ) -> Subscription<HotkeyAction> {
-    Subscription::run_with_id(
-        "global-hotkeys",
-        iced_futures::stream::channel(16, move |mut emitter| {
-            let map = Arc::clone(&action_map);
-            async move {
+    Subscription::run_with(HotkeyData(action_map), |data| {
+        let map = Arc::clone(&data.0);
+        stream::channel(
+            16,
+            move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<HotkeyAction>| async move {
                 let receiver = GlobalHotKeyEvent::receiver();
                 loop {
                     // Drain all pending events
@@ -113,7 +126,7 @@ pub fn hotkey_subscription(
                     // Poll at 100ms intervals to reduce overhead while maintaining responsiveness
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-            }
-        }),
-    )
+            },
+        )
+    })
 }
