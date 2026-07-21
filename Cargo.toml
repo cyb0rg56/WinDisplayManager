@@ -31,6 +31,11 @@ log = "0.4"
 env_logger = "0.11"
 tray-icon = "0.21"
 anyhow = "1"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Devices_Display",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

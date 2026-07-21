@@ -7,10 +7,10 @@ use cosmic::iced::{
     stream, Subscription,
 };
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, MenuId},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 
@@ -19,6 +19,12 @@ use tray_icon::{
 pub enum TrayMessage {
     /// User wants to show/focus the main window.
     ShowWindow,
+    /// User wants to load (apply) a named profile.
+    LoadProfile(String),
+    /// User wants to save the current layout as a new profile.
+    SaveCurrentProfile,
+    /// User wants to turn off all monitors.
+    TurnOffMonitors,
     /// User wants to exit the application.
     Exit,
 }
@@ -31,40 +37,66 @@ pub struct TrayStream {
 
 /// The system tray icon and its associated resources.
 pub struct SystemTray {
-    #[allow(dead_code)]
     tray_icon: TrayIcon,
 }
 
-// Static menu IDs
-static MENU_ID_SHOW: LazyLock<MenuId> = LazyLock::new(|| MenuId::new("MENU_ID_SHOW"));
-static MENU_ID_EXIT: LazyLock<MenuId> = LazyLock::new(|| MenuId::new("MENU_ID_EXIT"));
+// Menu ID constants and the profile-load prefix used to encode profile names.
+const MENU_ID_SHOW: &str = "MENU_ID_SHOW";
+const MENU_ID_EXIT: &str = "MENU_ID_EXIT";
+const MENU_ID_SAVE_CURRENT: &str = "MENU_ID_SAVE_CURRENT";
+const MENU_ID_TURN_OFF: &str = "MENU_ID_TURN_OFF";
+const PROFILE_LOAD_PREFIX: &str = "PROFILE_LOAD::";
+
+/// Build the tray context menu for the given profile names.
+fn build_menu(profiles: &[String]) -> anyhow::Result<Menu> {
+    let menu = Menu::new();
+    menu.append(&MenuItem::with_id(MENU_ID_SHOW, "Show Window", true, None))?;
+    menu.append(&PredefinedMenuItem::separator())?;
+
+    // Load Profile submenu (one item per profile).
+    let load_submenu = Submenu::new("Load Profile", !profiles.is_empty());
+    if profiles.is_empty() {
+        load_submenu.append(&MenuItem::with_id(
+            "PROFILE_NONE",
+            "(no profiles)",
+            false,
+            None,
+        ))?;
+    } else {
+        for name in profiles {
+            load_submenu.append(&MenuItem::with_id(
+                format!("{PROFILE_LOAD_PREFIX}{name}"),
+                name.as_str(),
+                true,
+                None,
+            ))?;
+        }
+    }
+    menu.append(&load_submenu)?;
+
+    menu.append(&MenuItem::with_id(
+        MENU_ID_SAVE_CURRENT,
+        "Save Current Layout\u{2026}",
+        true,
+        None,
+    ))?;
+    menu.append(&MenuItem::with_id(
+        MENU_ID_TURN_OFF,
+        "Turn Off Monitors",
+        true,
+        None,
+    ))?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&MenuItem::with_id(MENU_ID_EXIT, "Exit", true, None))?;
+    Ok(menu)
+}
 
 impl SystemTray {
     /// Create a new system tray icon with menu.
     ///
     /// Returns the tray and a stream for receiving tray events.
     pub fn new() -> anyhow::Result<(Self, TrayStream)> {
-        // Build the menu
-        let menu = Menu::new();
-        
-        let item_show = MenuItem::with_id(
-            MENU_ID_SHOW.clone(),
-            "Show Window",
-            true,
-            None,
-        );
-        menu.append(&item_show)?;
-        
-        let separator = PredefinedMenuItem::separator();
-        menu.append(&separator)?;
-        
-        let item_exit = MenuItem::with_id(
-            MENU_ID_EXIT.clone(),
-            "Exit",
-            true,
-            None,
-        );
-        menu.append(&item_exit)?;
+        let menu = build_menu(&[])?;
 
         // Build the tray icon
         let tray_icon = TrayIconBuilder::new()
@@ -79,13 +111,21 @@ impl SystemTray {
         // Set up event channels
         let (sender, receiver) = mpsc::unbounded_channel();
 
-        // Handle menu events
+        // Handle menu events. IDs are parsed by string so the single global
+        // handler keeps working after the menu is rebuilt.
         let menu_sender = sender.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            let msg = if event.id == *MENU_ID_SHOW {
+            let id = event.id.0.as_str();
+            let msg = if id == MENU_ID_SHOW {
                 TrayMessage::ShowWindow
-            } else if event.id == *MENU_ID_EXIT {
+            } else if id == MENU_ID_EXIT {
                 TrayMessage::Exit
+            } else if id == MENU_ID_SAVE_CURRENT {
+                TrayMessage::SaveCurrentProfile
+            } else if id == MENU_ID_TURN_OFF {
+                TrayMessage::TurnOffMonitors
+            } else if let Some(name) = id.strip_prefix(PROFILE_LOAD_PREFIX) {
+                TrayMessage::LoadProfile(name.to_string())
             } else {
                 return;
             };
@@ -106,6 +146,14 @@ impl SystemTray {
                 receiver: Arc::new(Mutex::new(receiver)),
             },
         ))
+    }
+
+    /// Rebuild the tray menu with the current set of profile names.
+    pub fn update_menu(&self, profiles: &[String]) {
+        match build_menu(profiles) {
+            Ok(menu) => self.tray_icon.set_menu(Some(Box::new(menu))),
+            Err(e) => log::warn!("Failed to rebuild tray menu: {e}"),
+        }
     }
 }
 

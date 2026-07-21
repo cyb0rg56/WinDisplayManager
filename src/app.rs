@@ -1,9 +1,11 @@
 use crate::config::{
     AppConfig, HotkeyAction, HotkeyBinding, BrightnessBinding, ContrastBinding,
-    InputSwitchBinding, PowerModeBinding, StepDirection,
+    InputSwitchBinding, PowerModeBinding, ProfileBinding, StepDirection,
 };
+use crate::ccd;
 use crate::ddc::{self, InputSource, MonitorInfo, MonitorState, PowerMode};
 use crate::hotkeys::{self, HotkeyManager};
+use crate::profiles;
 use crate::tray::{SystemTray, TrayMessage, TrayStream};
 use cosmic::app::Application;
 use cosmic::iced::alignment::Horizontal;
@@ -21,13 +23,7 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 // Simple inline SVG icon (monitor symbol)
-const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 320 280">
-  <!-- Monitor -->
-  <path d="M 365.047 120.547 L 158.791 120.547 C 143.497 120.554 131.102 132.953 131.101 148.247 L 131.101 276.344 C 131.102 291.636 143.498 304.033 158.791 304.034 L 229.066 304.034 L 229.066 326.233 L 197.294 326.233 C 189.148 326.233 184.056 335.051 188.129 342.106 C 190.02 345.38 193.513 347.397 197.294 347.397 L 326.547 347.397 C 334.693 347.397 339.784 338.579 335.711 331.524 C 333.821 328.25 330.327 326.233 326.547 326.233 L 294.771 326.233 L 294.771 304.035 L 365.046 304.035 C 380.342 304.038 392.744 291.64 392.746 276.344 L 392.746 148.242 C 392.742 132.946 380.342 120.548 365.046 120.547 L 365.047 120.547 Z M 368.507 276.34 C 368.502 278.25 366.956 279.797 365.047 279.804 L 158.791 279.804 C 156.881 279.798 155.336 278.249 155.336 276.34 L 155.336 148.242 C 155.337 146.334 156.883 144.789 158.791 144.788 L 365.047 144.788 C 366.954 144.79 368.501 146.334 368.507 148.242 L 368.507 276.34 Z" data-name="Monitor" style=""></path>
-  
-  <!-- Centered Lightning Bolt -->
-  <path transform="translate(5, -10)" d="M 271 190 L 248.371 190 L 236.157 224.479 C 236.124 224.577 236.197 224.676 236.306 224.681 L 250.319 224.681 C 250.433 224.676 250.517 224.78 250.484 224.882 L 239.64 255.276 C 239.438 255.842 239.967 256.398 240.589 256.277 C 240.792 256.238 240.97 256.13 241.092 255.972 L 273.806 213.863 C 273.882 213.769 273.82 213.631 273.692 213.617 C 273.688 213.617 273.681 213.616 273.674 213.616 L 258.968 213.616 C 258.847 213.603 258.775 213.489 258.819 213.384 L 271.149 190.17 C 271.157 190.085 271.091 190.009 271 190 Z" style="fill: rgb(255, 221, 0);"></path>
-</svg>"#;
+const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="131.1 120.55 261.65 226.85">  <!-- Monitor -->  <path d="M 365.047 120.547 L 158.791 120.547 C 143.497 120.554 131.102 132.953 131.101 148.247 L 131.101 276.344 C 131.102 291.636 143.498 304.033 158.791 304.034 L 229.066 304.034 L 229.066 326.233 L 197.294 326.233 C 189.148 326.233 184.056 335.051 188.129 342.106 C 190.02 345.38 193.513 347.397 197.294 347.397 L 326.547 347.397 C 334.693 347.397 339.784 338.579 335.711 331.524 C 333.821 328.25 330.327 326.233 326.547 326.233 L 294.771 326.233 L 294.771 304.035 L 365.046 304.035 C 380.342 304.038 392.744 291.64 392.746 276.344 L 392.746 148.242 C 392.742 132.946 380.342 120.548 365.046 120.547 L 365.047 120.547 Z M 368.507 276.34 C 368.502 278.25 366.956 279.797 365.047 279.804 L 158.791 279.804 C 156.881 279.798 155.336 278.249 155.336 276.34 L 155.336 148.242 C 155.337 146.334 156.883 144.789 158.791 144.788 L 365.047 144.788 C 366.954 144.79 368.501 146.334 368.507 148.242 L 368.507 276.34 Z" data-name="Monitor" style=""></path>    <!-- Centered Lightning Bolt -->  <path transform="translate(5, -10)" d="M 271 190 L 248.371 190 L 236.157 224.479 C 236.124 224.577 236.197 224.676 236.306 224.681 L 250.319 224.681 C 250.433 224.676 250.517 224.78 250.484 224.882 L 239.64 255.276 C 239.438 255.842 239.967 256.398 240.589 256.277 C 240.792 256.238 240.97 256.13 241.092 255.972 L 273.806 213.863 C 273.882 213.769 273.82 213.631 273.692 213.617 C 273.688 213.617 273.681 213.616 273.674 213.616 L 258.968 213.616 C 258.847 213.603 258.775 213.489 258.819 213.384 L 271.149 190.17 C 271.157 190.085 271.091 190.009 271 190 Z" style="fill: rgb(255, 221, 0);"></path></svg>"#;
 
 // ---------------------------------------------------------------------------
 // Navigation pages
@@ -37,6 +33,7 @@ const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="100
 pub enum Page {
     Monitor(u32), // 1-indexed monitor ID
     Hotkeys,
+    Profiles,
     Settings,
     About,
 }
@@ -77,6 +74,16 @@ pub enum Message {
     RemoveHotkeyBinding(usize, BindingCategory),
     SelectAddBindingType(usize),
     SaveConfig,
+    // Profiles
+    RefreshProfiles,
+    ProfilesListed(Vec<String>),
+    ProfileNameInput(String),
+    SaveCurrentProfile(String),
+    ApplyProfile(String),
+    DeleteProfile(String),
+    ProfileApplied(String),
+    StartRecordingProfile(String),
+    MonitorsPoweredOff,
     // System tray
     Tray(TrayMessage),
     /// Hide window (close-to-tray)
@@ -95,6 +102,7 @@ pub enum BindingCategory {
     Brightness,
     Contrast,
     PowerMode,
+    Profile,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +148,14 @@ pub enum RecordingState {
         win: bool,
         key: String,
     },
+    RecordingProfile {
+        profile_name: String,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        win: bool,
+        key: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +177,10 @@ pub struct AppModel {
     pending_contrast: Option<(u32, u16)>,
     // Selected action type in the "add hotkey" dropdown (0=brightness, 1=contrast, 2=input)
     add_binding_type: usize,
+    // Saved monitor-layout profiles (file stems)
+    profiles: Vec<String>,
+    // Text input for naming a new profile
+    profile_name_input: String,
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
 }
@@ -316,11 +336,16 @@ impl cosmic::Application for AppModel {
             pending_brightness: None,
             pending_contrast: None,
             add_binding_type: 0,
+            profiles: Vec::new(),
+            profile_name_input: String::new(),
             tray,
         };
 
-        // Fire initial monitor detection
-        let cmd = app.update(Message::RefreshMonitors);
+        // Fire initial monitor detection and profile listing
+        let cmd = cosmic::app::Task::batch([
+            app.update(Message::RefreshMonitors),
+            app.update(Message::RefreshProfiles),
+        ]);
         (app, cmd)
     }
 
@@ -444,6 +469,11 @@ impl cosmic::Application for AppModel {
                     .insert()
                     .text("Hotkeys")
                     .data::<Page>(Page::Hotkeys);
+                // Profiles page
+                self.nav
+                    .insert()
+                    .text("Profiles")
+                    .data::<Page>(Page::Profiles);
                 // Settings page
                 self.nav
                     .insert()
@@ -825,6 +855,22 @@ impl cosmic::Application for AppModel {
                                 .unwrap_or_else(|| Arc::new(HashMap::new()));
                         }
                     }
+                    RecordingState::RecordingProfile { profile_name, .. } => {
+                        self.config.hotkeys.profile_bindings.push(ProfileBinding {
+                            profile_name: profile_name.clone(),
+                            hotkey: HotkeyBinding {
+                                ctrl,
+                                alt,
+                                shift,
+                                win,
+                                key: key_string.clone(),
+                            },
+                        });
+                        self.status_message = format!("Profile hotkey added: {}. Remember to save configuration.",
+                            format_hotkey(ctrl, alt, shift, win, &key_string));
+                        self.recording_state = RecordingState::NotRecording;
+                        self.refresh_hotkey_registration();
+                    }
                     RecordingState::NotRecording => {}
                 }
             }
@@ -853,6 +899,11 @@ impl cosmic::Application for AppModel {
                     BindingCategory::PowerMode => {
                         if idx < self.config.hotkeys.power_mode_bindings.len() {
                             self.config.hotkeys.power_mode_bindings.remove(idx);
+                        }
+                    }
+                    BindingCategory::Profile => {
+                        if idx < self.config.hotkeys.profile_bindings.len() {
+                            self.config.hotkeys.profile_bindings.remove(idx);
                         }
                     }
                 }
@@ -905,6 +956,99 @@ impl cosmic::Application for AppModel {
                 }
             }
 
+            // -- Profiles ---------------------------------------------------
+            Message::RefreshProfiles => {
+                return cosmic::app::Task::perform(
+                    async { tokio::task::spawn_blocking(profiles::list_profiles).await },
+                    |result| match result {
+                        Ok(list) => cosmic::Action::App(Message::ProfilesListed(list)),
+                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                    },
+                );
+            }
+
+            Message::ProfilesListed(list) => {
+                self.profiles = list;
+                // Keep the tray menu in sync with the profile list.
+                if let Some((ref tray, _)) = self.tray {
+                    tray.update_menu(&self.profiles);
+                }
+            }
+
+            Message::ProfileNameInput(text) => {
+                self.profile_name_input = text;
+            }
+
+            Message::SaveCurrentProfile(name) => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    self.status_message = "Enter a profile name first.".into();
+                    return cosmic::app::Task::none();
+                }
+                self.profile_name_input.clear();
+                self.status_message = format!("Saving profile '{name}'...");
+                return cosmic::app::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || profiles::save_current(&name)).await
+                    },
+                    |result| match result {
+                        Ok(Ok(())) => cosmic::Action::App(Message::RefreshProfiles),
+                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Save profile error: {e}"))),
+                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                    },
+                );
+            }
+
+            Message::ApplyProfile(name) => {
+                self.status_message = format!("Applying profile '{name}'...");
+                let for_task = name.clone();
+                return cosmic::app::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || profiles::apply_profile(&for_task)).await
+                    },
+                    move |result| match result {
+                        Ok(Ok(())) => cosmic::Action::App(Message::ProfileApplied(name.clone())),
+                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Apply profile error: {e}"))),
+                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                    },
+                );
+            }
+
+            Message::ProfileApplied(name) => {
+                self.status_message = format!("Applied profile '{name}'.");
+                // Topology changed: re-detect monitors.
+                return self.update(Message::RefreshMonitors);
+            }
+
+            Message::DeleteProfile(name) => {
+                return cosmic::app::Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || profiles::delete_profile(&name)).await
+                    },
+                    |result| match result {
+                        Ok(Ok(())) => cosmic::Action::App(Message::RefreshProfiles),
+                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Delete profile error: {e}"))),
+                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                    },
+                );
+            }
+
+            Message::StartRecordingProfile(profile_name) => {
+                self.recording_state = RecordingState::RecordingProfile {
+                    profile_name,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    win: false,
+                    key: String::new(),
+                };
+                self.status_message = "Recording hotkey... Press modifiers and key".into();
+            }
+
+            Message::MonitorsPoweredOff => {
+                self.status_message = "Monitors turned off.".into();
+            }
+
             // -- Hide window (close-to-tray) --------------------------------
             Message::HideWindow => {
                 log::info!("Hiding window to tray");
@@ -945,6 +1089,28 @@ impl cosmic::Application for AppModel {
                             let title_task = self.update_title();
                             return cosmic::app::Task::batch([open_task.discard(), title_task]);
                         }
+                    }
+                    TrayMessage::LoadProfile(name) => {
+                        log::info!("Tray: load profile '{name}'");
+                        return self.update(Message::ApplyProfile(name));
+                    }
+                    TrayMessage::SaveCurrentProfile => {
+                        log::info!("Tray: save current profile requested");
+                        // Show the window on the Profiles page so the user can name it.
+                        if let Some(pos) = self.nav_position_of(Page::Profiles) {
+                            self.nav.activate_position(pos);
+                        }
+                        return self.update(Message::Tray(TrayMessage::ShowWindow));
+                    }
+                    TrayMessage::TurnOffMonitors => {
+                        log::info!("Tray: turn off monitors");
+                        return cosmic::app::Task::perform(
+                            async { tokio::task::spawn_blocking(ccd::turn_off_monitors).await },
+                            |result| match result {
+                                Ok(()) => cosmic::Action::App(Message::MonitorsPoweredOff),
+                                Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                            },
+                        );
                     }
                     TrayMessage::Exit => {
                         log::info!("Tray: Exit requested");
@@ -990,6 +1156,7 @@ impl cosmic::Application for AppModel {
         let content: Element<_> = match page {
             Page::Monitor(monitor_id) => self.view_monitor(monitor_id),
             Page::Hotkeys => self.view_hotkeys(),
+            Page::Profiles => self.view_profiles(),
             Page::Settings => self.view_settings(),
             Page::About => self.view_about(),
         };
@@ -1285,6 +1452,30 @@ impl AppModel {
             .title("Power Mode Hotkeys")
             .add(power_items);
 
+        // --- Profile switch bindings ---
+        let mut profile_items = widget::column::with_capacity(
+            self.config.hotkeys.profile_bindings.len() + 1,
+        )
+        .spacing(4);
+
+        for (i, binding) in self.config.hotkeys.profile_bindings.iter().enumerate() {
+            let label = format!("Apply '{}' : {}", binding.profile_name, binding.hotkey);
+            profile_items = profile_items.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body(label).width(Length::Fill))
+                    .push(
+                        widget::button::destructive("Remove")
+                            .on_press(Message::RemoveHotkeyBinding(i, BindingCategory::Profile)),
+                    )
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+            );
+        }
+
+        let profile_section = cosmic::widget::settings::section()
+            .title("Profile Switch Hotkeys")
+            .add(profile_items);
+
         // --- Hotkey recording UI or Quick-add buttons ---
         let add_section = match &self.recording_state {
             RecordingState::NotRecording => {
@@ -1392,13 +1583,14 @@ impl AppModel {
                 .on_press(Message::SaveConfig),
         );
 
-        let content = widget::column::with_capacity(8)
+        let content = widget::column::with_capacity(9)
             .push(header)
             .push(description)
             .push(brightness_section)
             .push(contrast_section)
             .push(input_section)
             .push(power_section)
+            .push(profile_section)
             .push(add_section)
             .push(save_row)
             .spacing(space_s)
@@ -1475,6 +1667,109 @@ impl AppModel {
         .into()
     }
 
+    /// View for the monitor-layout profiles page.
+    fn view_profiles(&self) -> Element<'_, Message> {
+        let space_s = cosmic::theme::spacing().space_s;
+
+        let header = widget::text::title3("Monitor Layout Profiles");
+        let description = widget::text::body(
+            "Save the current monitor arrangement (resolution, position, primary, \
+             refresh rate, rotation, scaling) as a profile and restore it later \
+             with one click, a hotkey, or from the tray.",
+        );
+
+        // Saved profiles list.
+        let mut items =
+            widget::column::with_capacity(self.profiles.len() + 1).spacing(4);
+        if self.profiles.is_empty() {
+            items = items.push(widget::text::body("No profiles saved yet."));
+        } else {
+            for name in &self.profiles {
+                let row = widget::row::with_capacity(4)
+                    .push(widget::text::body(name.clone()).width(Length::Fill))
+                    .push(
+                        widget::button::standard("Apply")
+                            .on_press(Message::ApplyProfile(name.clone())),
+                    )
+                    .push(
+                        widget::button::standard("Set Hotkey")
+                            .on_press(Message::StartRecordingProfile(name.clone())),
+                    )
+                    .push(
+                        widget::button::destructive("Delete")
+                            .on_press(Message::DeleteProfile(name.clone())),
+                    )
+                    .spacing(space_s)
+                    .align_y(Alignment::Center);
+                items = items.push(row);
+            }
+        }
+        let profiles_section = cosmic::widget::settings::section()
+            .title("Saved Profiles")
+            .add(items);
+
+        let mut content = widget::column::with_capacity(4)
+            .push(header)
+            .push(description)
+            .spacing(space_s)
+            .width(Length::Fill);
+
+        if let RecordingState::RecordingProfile { .. } = &self.recording_state {
+            content = content.push(self.view_recording_panel(&self.recording_state, space_s));
+        } else {
+            let name_input =
+                widget::text_input("New profile name", &self.profile_name_input)
+                    .on_input(Message::ProfileNameInput)
+                    .on_submit(Message::SaveCurrentProfile)
+                    .width(Length::Fill);
+            let save_button = widget::button::suggested("Save Current Layout")
+                .on_press(Message::SaveCurrentProfile(self.profile_name_input.clone()));
+            let save_row = widget::row::with_capacity(2)
+                .push(name_input)
+                .push(save_button)
+                .spacing(space_s)
+                .align_y(Alignment::Center);
+            let save_section = cosmic::widget::settings::section()
+                .title("Save Current Layout")
+                .add(save_row);
+            content = content.push(save_section);
+        }
+
+        content = content.push(profiles_section);
+
+        widget::scrollable(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// Find the nav position of a page, if present.
+    fn nav_position_of(&self, target: Page) -> Option<u16> {
+        self.nav.iter().find_map(|id| {
+            if self.nav.data::<Page>(id) == Some(&target) {
+                self.nav.position(id)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Re-register global hotkeys from the current config, recreating the
+    /// manager if needed, and refresh the cached action map.
+    fn refresh_hotkey_registration(&mut self) {
+        if let Some(ref mut manager) = self.hotkey_manager {
+            manager.update(&self.config);
+            self.hotkey_action_map = manager.action_map();
+        } else {
+            self.hotkey_manager = HotkeyManager::new(&self.config);
+            self.hotkey_action_map = self
+                .hotkey_manager
+                .as_ref()
+                .map(|m| m.action_map())
+                .unwrap_or_else(|| Arc::new(HashMap::new()));
+        }
+    }
+
     /// View for the hotkey recording panel.
     fn view_recording_panel(&self, recording_state: &RecordingState, space_s: u16) -> cosmic::widget::settings::Section<'_, Message> {
         let (action_desc, _monitor_id, ctrl, alt, shift, win, key) = match recording_state {
@@ -1497,6 +1792,9 @@ impl AppModel {
             }
             RecordingState::RecordingPowerMode { monitor_id, power_mode, ctrl, alt, shift, win, key } => {
                 (format!("Monitor {} Power {}", monitor_id, power_mode), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
+            }
+            RecordingState::RecordingProfile { profile_name, ctrl, alt, shift, win, key } => {
+                (format!("Apply profile '{}'", profile_name), 0, *ctrl, *alt, *shift, *win, key.clone())
             }
             RecordingState::NotRecording => {
                 return cosmic::widget::settings::section()
@@ -1637,6 +1935,10 @@ impl AppModel {
                         Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
                     },
                 )
+            }
+
+            HotkeyAction::ApplyProfile { profile_name } => {
+                self.update(Message::ApplyProfile(profile_name))
             }
         }
     }

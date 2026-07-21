@@ -1,9 +1,11 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod ccd;
 mod config;
 mod ddc;
 mod hotkeys;
+mod profiles;
 mod tray;
 
 fn main() -> cosmic::iced::Result {
