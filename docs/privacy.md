@@ -4,6 +4,8 @@ title: Privacy Policy — WinDisplayManager
 permalink: /privacy/
 ---
 
+{% include nav.html %}
+
 # Privacy Policy
 
 _Last updated: 2026-07-22_
@@ -19,18 +21,18 @@ and its dependencies.
 
 Everything WinDisplayManager reads or writes stays on your own machine:
 
-- **Hotkey configuration** — your global hotkey bindings and settings are
+- **Hotkey configuration**: Your global hotkey bindings and settings are
   saved as JSON at `%APPDATA%\windisplaymanager\config.json`. See the
   [Hotkeys guide]({{ site.baseurl }}/docs/hotkeys/).
-- **Display profiles** — saved monitor layouts are stored as JSON files
+- **Display profiles**: Saved monitor layouts are stored as JSON files
   under `%APPDATA%\MonitorSwitcher\Profiles\`. See the
   [Profiles guide]({{ site.baseurl }}/docs/profiles/).
-- **Monitor communication (DDC/CI)** — brightness, contrast, input, and power
+- **Monitor communication (DDC/CI)**: Brightness, contrast, input, and power
   mode changes are sent directly from your PC to your monitor over the
   physical display cable (DDC/CI). This is local hardware I/O, not a network
-  protocol, and none of it is transmitted anywhere else.
+  protocol and none of it is transmitted anywhere else.
 
-None of the above data ever leaves your device, and the app has no accounts,
+None of the above data ever leaves your device, the app has no accounts,
 sign-in, or cloud sync of any kind.
 
 ## Third-party services
@@ -56,3 +58,5 @@ date above will reflect that change.
 
 Open an issue on the [GitHub repository](https://github.com/cyb0rg56/WinDisplayManager)
 if you have any questions about this policy.
+
+{% include footer.html %}

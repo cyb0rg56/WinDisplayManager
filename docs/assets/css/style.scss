@@ -5,6 +5,35 @@
 
 /* Minimal overrides on top of jekyll-theme-cayman */
 
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: center;
+  gap: 1.5em;
+  padding: 0.75em 1em;
+  margin: 0 0 2em;
+  background: #fff;
+  border-bottom: 1px solid #e1e4e8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.site-nav a {
+  color: #159957;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  text-decoration: underline;
+}
+
+.site-nav a.active {
+  color: #24292e;
+  border-bottom: 2px solid #159957;
+}
+
 .site-logo {
   vertical-align: middle;
   margin-right: 0.4em;

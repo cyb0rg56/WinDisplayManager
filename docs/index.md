@@ -3,6 +3,8 @@ layout: default
 title: WinDisplayManager
 ---
 
+{% include nav.html %}
+
 <p align="center">{% include logo.svg %}</p>
 
 <h1 align="center">WinDisplayManager</h1>
@@ -21,13 +23,12 @@ title: WinDisplayManager
 ## Features
 
 - **Brightness & contrast control** over DDC/CI, per monitor.
-- **Input source switching** (HDMI, DisplayPort, etc.) with a click or a hotkey.
-- **Power mode control** — put a monitor to sleep or wake it from the app.
-- **Global hotkeys** for brightness/contrast steps, input switching, power mode, and applying profiles — configurable entirely in-app, no config file editing required.
-- **Display profiles** — save and restore whole monitor layouts (resolution, position, orientation) via Windows CCD, and switch between them instantly or with a hotkey.
-- **System tray integration** — lives quietly in the tray, always one click away.
-- **Native GUI** built with [libcosmic](https://github.com/pop-os/libcosmic)/[iced](https://github.com/iced-rs/iced) — no Electron, no background web runtime.
-
+- **Input source switching** with a click or a hotkey.
+- **Power mode control** to put a monitor to sleep or wake it from the app.
+- **Global hotkeys** for brightness/contrast steps, input switching, power mode and applying profiles. This is configurable entirely in-app.
+- **Display profiles** to save and restore whole monitor layouts (resolution, position, orientation) via Windows CCD, and switch between them instantly or with a hotkey.
+- **System tray integration** that lives quietly in the tray, always one click away.
+- **Native GUI** built with [libcosmic](https://github.com/pop-os/libcosmic)/[iced](https://github.com/iced-rs/iced).
 ## Screenshots
 
 <div class="screenshot-grid">
@@ -49,10 +50,4 @@ title: WinDisplayManager
 - [Hotkeys guide]({{ site.baseurl }}/docs/hotkeys/) — how hotkey recording and config work.
 - [Profiles guide]({{ site.baseurl }}/docs/profiles/) — how display profiles are stored and applied.
 
-<footer class="site-footer">
-  <p>
-    <a href="https://github.com/cyb0rg56/WinDisplayManager">Source on GitHub</a> ·
-    <a href="{{ site.baseurl }}/privacy/">Privacy Policy</a> ·
-    Licensed under MIT
-  </p>
-</footer>
+{% include footer.html %}

@@ -4,6 +4,8 @@ title: Profiles — WinDisplayManager
 permalink: /docs/profiles/
 ---
 
+{% include nav.html %}
+
 # Display profiles
 
 A **profile** is a saved snapshot of your monitor layout — which displays are
@@ -42,10 +44,4 @@ profile name, a creation timestamp, and the captured CCD display
 configuration. As with hotkeys, you don't need to edit these by hand, but
 they're plain JSON if you want to inspect, back up, or share them.
 
-<footer class="site-footer">
-  <p>
-    <a href="{{ site.baseurl }}/">Home</a> ·
-    <a href="https://github.com/cyb0rg56/WinDisplayManager">Source on GitHub</a> ·
-    <a href="{{ site.baseurl }}/privacy/">Privacy Policy</a>
-  </p>
-</footer>
+{% include footer.html %}
