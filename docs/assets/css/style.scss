@@ -1,0 +1,67 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* Minimal overrides on top of jekyll-theme-cayman */
+
+.site-logo {
+  vertical-align: middle;
+  margin-right: 0.4em;
+}
+
+.page-header h1 .site-logo {
+  display: inline-block;
+}
+
+.badges {
+  margin: 0.75em 0 1.25em;
+}
+
+.badges img {
+  margin: 0 0.2em;
+}
+
+.btn-download {
+  display: inline-block;
+  padding: 0.6em 1.4em;
+  margin: 0.5em 0.3em;
+  border-radius: 0.3em;
+  background-color: #159957;
+  color: #fff !important;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.btn-download:hover {
+  background-color: #0d7a44;
+}
+
+.screenshot-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  margin: 1em 0;
+  border: 2px dashed #ccc;
+  border-radius: 0.4em;
+  background: #f6f8fa;
+  color: #6a737d;
+  font-style: italic;
+  text-align: center;
+  padding: 1em;
+}
+
+.screenshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1em;
+}
+
+.site-footer {
+  margin-top: 2.5em;
+  padding-top: 1em;
+  border-top: 1px solid #e1e4e8;
+  font-size: 0.9em;
+  color: #6a737d;
+}

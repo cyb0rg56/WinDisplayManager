@@ -1,0 +1,16 @@
+title: WinDisplayManager
+description: DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles.
+theme: jekyll-theme-cayman
+baseurl: "/WinDisplayManager"
+url: "https://cyb0rg56.github.io"
+
+repository: cyb0rg56/WinDisplayManager
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - README.md
