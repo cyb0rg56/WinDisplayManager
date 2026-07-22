@@ -1299,16 +1299,20 @@ impl AppModel {
                         ),
                     );
 
-                widget::column::with_capacity(6)
-                    .push(header)
-                    .push(resolution_label)
-                    .push(input_section)
-                    .push(brightness_section)
-                    .push(contrast_section)
-                    .spacing(space_s)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
+                widget::container(
+                    widget::column::with_capacity(6)
+                        .push(header)
+                        .push(resolution_label)
+                        .push(input_section)
+                        .push(brightness_section)
+                        .push(contrast_section)
+                        .spacing(space_s)
+                        .width(Length::Fill)
+                        .max_width(700.0),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
             }
         }
     }
@@ -1597,10 +1601,12 @@ impl AppModel {
             .width(Length::Fill);
 
         // Wrap in scrollable to ensure all content is accessible
-        widget::scrollable(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        widget::scrollable(
+            widget::container(content).width(Length::Fill).max_width(700.0),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// View for the settings page (step sizes and other config).
@@ -1651,10 +1657,12 @@ impl AppModel {
             .width(Length::Fill);
 
         // Wrap in scrollable to ensure all content is accessible
-        widget::scrollable(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        widget::scrollable(
+            widget::container(content).width(Length::Fill).max_width(700.0),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// View for the About page.
@@ -1737,10 +1745,12 @@ impl AppModel {
 
         content = content.push(profiles_section);
 
-        widget::scrollable(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        widget::scrollable(
+            widget::container(content).width(Length::Fill).max_width(700.0),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// Find the nav position of a page, if present.
