@@ -23,6 +23,7 @@ fn main() -> cosmic::iced::Result {
         .antialiasing(false)
         // Don't exit when the window is closed — keep running in the tray
         .exit_on_close(false)
+        .size(cosmic::iced::Size::new(1280.0, 720.0))
         .size_limits(
             cosmic::iced::Limits::NONE
                 .min_width(600.0)
