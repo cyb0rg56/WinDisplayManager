@@ -1,0 +1,8 @@
+# MSIX build staging + output (assets under Assets/ ARE committed)
+obj/
+*.msix
+*.appx
+*.appxbundle
+# Local test signing material — never commit
+*.pfx
+*.cer

@@ -40,6 +40,17 @@ jobs:
       shell: pwsh
       run: |
         Copy-Item target/release/windisplaymanager_rs.exe windisplaymanager_rs-${{ github.ref_name }}.exe
+    - name: Build MSIX package
+      shell: pwsh
+      run: |
+        $ver = "${{ github.ref_name }}".TrimStart('v')
+        ./packaging/msix/build-msix.ps1 -Version "$ver.0"
+    - name: Upload MSIX artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: msix-package
+        path: packaging/msix/obj/*.msix
+        if-no-files-found: error
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:

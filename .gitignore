@@ -1,1 +1,7 @@
 /target
+
+# Code-signing / test certificate material — never commit private keys
+*.pfx
+*.cer
+*.pvk
+*.snk

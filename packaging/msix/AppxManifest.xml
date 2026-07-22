@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX package manifest for WinDisplayManager.
+
+  Identity values below are the real values from Partner Center
+  (Product > Product identity). They are NOT secret; they ship inside every package.
+  If you ever need to look them up again:
+    * Identity/@Name        -> "Package/Identity/Name"        (e.g. HumzaKhan.WinDisplayManager)
+    * Identity/@Publisher   -> "Package/Identity/Publisher"   (e.g. CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX)
+    * Properties/PublisherDisplayName -> "Publisher display name"
+
+  Identity/@Version is a placeholder (0.0.0.0). It is injected at build time
+  from the Cargo.toml version (local) or the git tag (CI). The Store reserves
+  the 4th octet, so it must always be x.y.z.0.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 rescap">
+
+  <Identity
+    Name="HumzaKhan.WinDisplayManager"
+    Publisher="CN=412A6E72-F28E-4C36-AE10-EDF861A3A7FB"
+    Version="0.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>WinDisplayManager</DisplayName>
+    <PublisherDisplayName>Humza Khan</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="WinDisplayManager"
+      Executable="windisplaymanager_rs.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="WinDisplayManager"
+        Description="DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles."
+        BackgroundColor="#1E1E1E"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          ShortName="WinDisplayMgr"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png"
+          Wide310x150Logo="Assets\Wide310x150Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Required for a full-trust Win32 EXE: DDC/CI device I/O, global hotkeys,
+         system tray, and Windows CCD display-config APIs. Justify at submission. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
