@@ -1,0 +1,9 @@
+# Statically link the MSVC C runtime (VCRUNTIME140.dll + UCRT) into the EXE.
+#
+# Without this, the release binary dynamically imports VCRUNTIME140.dll, which is
+# NOT present on a clean Windows install (it ships with the Visual C++
+# Redistributable). On Microsoft Store certification devices the app then fails to
+# launch, which is reported as policy 10.3.4 "the product failed to install".
+# Static linking makes the EXE self-contained.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

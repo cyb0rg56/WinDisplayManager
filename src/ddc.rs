@@ -283,6 +283,29 @@ pub fn set_power_mode(monitor_id: u32, mode: PowerMode) -> Result<()> {
     Ok(())
 }
 
+/// Set an arbitrary VCP feature to a value for the given 1-indexed monitor.
+/// Used for custom-VCP hotkey actions.
+pub fn set_vcp(monitor_id: u32, code: u8, value: u16) -> Result<()> {
+    let mut monitors = get_ddc_monitors()?;
+    let idx = validated_index(monitor_id, monitors.len())?;
+    let mon = &mut monitors[idx];
+    mon.set_vcp_feature(code, value)
+        .map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
+    Ok(())
+}
+
+/// Read an arbitrary VCP feature's current and maximum value for the given
+/// 1-indexed monitor. Used for custom-VCP hotkey offset actions.
+pub fn get_vcp(monitor_id: u32, code: u8) -> Result<(u16, u16)> {
+    let mut monitors = get_ddc_monitors()?;
+    let idx = validated_index(monitor_id, monitors.len())?;
+    let mon = &mut monitors[idx];
+    let val = mon
+        .get_vcp_feature(code)
+        .map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
+    Ok((val.value(), val.maximum()))
+}
+
 /// Read full monitor state (brightness, contrast, input) for the given 1-indexed monitor.
 pub fn read_monitor_state(monitor_id: u32, info: MonitorInfo) -> Result<MonitorState> {
     let mut monitors = get_ddc_monitors()?;

@@ -25,7 +25,7 @@ title: WinDisplayManager
 - **Brightness & contrast control** over DDC/CI, per monitor.
 - **Input source switching** with a click or a hotkey.
 - **Power mode control** to put a monitor to sleep or wake it from the app.
-- **Global hotkeys** for brightness/contrast steps, input switching, power mode and applying profiles. This is configurable entirely in-app.
+- **Global hotkeys** with configurable *action chains* — one shortcut can run several actions at once (set or offset brightness/contrast, switch inputs, change power mode, write custom DDC/CI VCP codes, apply a profile, or turn displays off), each targeting all displays or specific monitors. Configurable entirely in-app.
 - **Display profiles** to save and restore whole monitor layouts (resolution, position, orientation) via Windows CCD, and switch between them instantly or with a hotkey.
 - **System tray integration** that lives quietly in the tray, always one click away.
 - **Native GUI** built with [libcosmic](https://github.com/pop-os/libcosmic)/[iced](https://github.com/iced-rs/iced).
@@ -43,7 +43,7 @@ title: WinDisplayManager
 2. **Run it** — it's a single portable executable, no installer needed.
    > Since the executable isn't code-signed, Windows SmartScreen may warn you on first run. Click **More info → Run anyway** to proceed.
 3. Your monitors are **detected automatically**. Adjust brightness, contrast, input, and power mode right from the Monitor page.
-4. Head to **Settings** to record global hotkeys, or **Profiles** to save your current display layout for quick recall later.
+4. Head to **Hotkeys** to create global hotkeys, or **Profiles** to save your current display layout for quick recall later.
 
 ## Documentation
 

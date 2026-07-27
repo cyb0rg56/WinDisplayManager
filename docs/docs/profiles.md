@@ -18,17 +18,19 @@ a single hotkey.
 
 1. Arrange your displays the way you want them (using Windows display
    settings or your dock/monitor switch).
-2. Open the **Profiles** page in WinDisplayManager and click **Save Current
-   as Profile**.
-3. Give it a name — this becomes the filename, so avoid characters that
-   aren't valid in Windows filenames (`< > : " / \ | ? *`); the app will
-   strip/reject invalid names automatically.
+2. Open the **Profiles** page in WinDisplayManager, enter a name in the
+   **New profile name** box, and click **Save Current Layout**.
+3. The name becomes the filename, so avoid characters that aren't valid in
+   Windows filenames (`< > : " / \ | ? *`); the app will strip/reject invalid
+   names automatically.
 
 ## Applying a profile
 
-Click a saved profile in the **Profiles** page to apply it immediately, or
-bind it to a global hotkey from the [Hotkeys settings]({{ site.baseurl }}/docs/hotkeys/)
-so you can switch layouts without opening the app.
+Click **Apply** next to a saved profile to apply it immediately. To bind a
+profile to a global hotkey, click **Set Hotkey** next to it — this adds a
+matching *Apply Profile* hotkey on the [Hotkeys page]({{ site.baseurl }}/docs/hotkeys/)
+and jumps there so you can record a key combination — letting you switch
+layouts without opening the app.
 
 ## Where profiles are stored
 
