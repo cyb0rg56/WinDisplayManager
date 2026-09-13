@@ -202,6 +202,18 @@ fn key_to_string(key: &Key) -> String {
                 Named::F10 => "F10",
                 Named::F11 => "F11",
                 Named::F12 => "F12",
+                Named::F13 => "F13",
+                Named::F14 => "F14",
+                Named::F15 => "F15",
+                Named::F16 => "F16",
+                Named::F17 => "F17",
+                Named::F18 => "F18",
+                Named::F19 => "F19",
+                Named::F20 => "F20",
+                Named::F21 => "F21",
+                Named::F22 => "F22",
+                Named::F23 => "F23",
+                Named::F24 => "F24",
                 Named::ArrowUp => "ArrowUp",
                 Named::ArrowDown => "ArrowDown",
                 Named::ArrowLeft => "ArrowLeft",
@@ -232,6 +244,49 @@ fn key_to_string(key: &Key) -> String {
             }
         }
         Key::Unidentified => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_to_string;
+    use crate::config::HotkeyBinding;
+    use cosmic::iced::keyboard::{key::Named, Key};
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+
+    #[test]
+    fn extended_function_keys_convert_to_hotkeys() {
+        for (named, key, code) in [
+            (Named::F13, "F13", Code::F13),
+            (Named::F14, "F14", Code::F14),
+            (Named::F15, "F15", Code::F15),
+            (Named::F16, "F16", Code::F16),
+            (Named::F17, "F17", Code::F17),
+            (Named::F18, "F18", Code::F18),
+            (Named::F19, "F19", Code::F19),
+            (Named::F20, "F20", Code::F20),
+            (Named::F21, "F21", Code::F21),
+            (Named::F22, "F22", Code::F22),
+            (Named::F23, "F23", Code::F23),
+            (Named::F24, "F24", Code::F24),
+        ] {
+            let recorded_key = key_to_string(&Key::Named(named));
+            assert_eq!(recorded_key, key);
+
+            for with_modifiers in [false, true] {
+                let binding = HotkeyBinding {
+                    ctrl: with_modifiers,
+                    alt: with_modifiers,
+                    shift: with_modifiers,
+                    win: with_modifiers,
+                    key: recorded_key.clone(),
+                };
+                let modifiers = with_modifiers.then_some(
+                    Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT | Modifiers::SUPER,
+                );
+                assert_eq!(binding.to_hotkey(), Some(HotKey::new(modifiers, code)));
+            }
+        }
     }
 }
 
