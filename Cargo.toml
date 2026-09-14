@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [profile.release]
 strip = true
-lto = true
+lto = "thin"
 
 [build-dependencies]
 winres = "0.1"
