@@ -24,10 +24,13 @@ a single hotkey.
    Windows filenames (`< > : " / \ | ? *`); the app will strip/reject invalid
    names automatically.
 
+If that profile already exists, the app asks you to confirm **Replace** before
+capturing and overwriting it.
+
 ## Applying a profile
 
 Click **Apply** next to a saved profile to apply it immediately. To bind a
-profile to a global hotkey, click **Set Hotkey** next to it — this adds a
+profile to a global hotkey, click **Hotkey** next to it — this adds a
 matching *Apply Profile* hotkey on the [Hotkeys page]({{ site.baseurl }}/docs/hotkeys/)
 and jumps there so you can record a key combination — letting you switch
 layouts without opening the app.

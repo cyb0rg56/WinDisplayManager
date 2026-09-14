@@ -21,9 +21,7 @@ Hotkeys are managed on the **Hotkeys** page.
 Each hotkey card shows:
 
 - Its **key combination** (the accelerator), e.g. `Ctrl + Alt + F1`.
-- A **status dot** — **●** means the combination is registered with Windows and
-  active, **○** means it isn't bound yet or couldn't be registered (for example
-  because another app already owns that combination).
+- Its registration status: **Active**, **Inactive**, or **Unbound**.
 - One or more **actions**, which run in order when the hotkey is pressed.
 
 ### Action type
@@ -52,9 +50,9 @@ Actions are edited vertically in four labeled sections:
 - **Actions** — choose **Set**, **Offset**, or **Turn Off**.
 - **Commands** — choose Brightness, Contrast, Input Source, Power Mode,
    Apply Profile, or Custom VCP Code.
-- **Value** — numeric values can be typed directly or adjusted with the
-   decrement and increment buttons. Other commands show their appropriate
-   dropdown.
+- **Value** — type signed decimal values directly. Other commands show their
+   appropriate dropdown. Custom VCP actions also provide a separate hexadecimal
+   **VCP code** field.
 - **Displays** — use switches for **All displays** and each detected monitor.
 
 Turn Off actions only show Actions and Displays because they do not need a
@@ -72,27 +70,31 @@ explicit monitor selection.
 **Input Source** actions show an input dropdown for each selected monitor when
 **All displays** is off, so one hotkey can switch different monitors to
 different inputs. Selecting every monitor does not replace those distinct input
-choices. An unselected monitor is left unchanged.
+choices. An unselected monitor is left unchanged. Saved monitor selections
+remain visible as unavailable if that display is temporarily disconnected.
+
+**Apply Profile** always restores the entire saved display layout, so it does
+not show per-display switches.
 
 ## Creating a hotkey
 
-1. Open the **Hotkeys** page and click **+ Add Hotkey**.
+1. Open the **Hotkeys** page and click **Add Hotkey**.
 2. Recording starts immediately — press the modifiers and key you want
    (`Ctrl`/`Alt`/`Shift`/`Win` + a key). The captured combination is shown back
    to you. Use **Record** to re-record it later, or **Clear** to unbind it.
-3. Configure the action (type, target, value, monitors). Click **+ Add Action**
+3. Configure the action (type, target, value, monitors). Click **Add Action**
    to chain additional actions onto the same hotkey.
 4. Click **Save Configuration** to persist everything and (re)register the
    hotkeys with Windows.
 
-Remove a single action with its **Delete** button, or the entire hotkey with
-**Delete Hotkey**. All global hotkeys can be toggled on/off from the
+Remove a single action with **Delete Action**, or the entire hotkey with
+**Delete**. All global hotkeys can be toggled on/off from the
 **Settings** page without deleting your bindings.
 
 ## Turn-off behavior
 
-The **Turn Off** action type follows the *"Turn Off" action behavior* setting at
-the bottom of the Hotkeys page:
+The **Turn Off** action type follows the **Power-off method** setting on the
+**Settings** page:
 
 | Mode | Effect |
 |---|---|

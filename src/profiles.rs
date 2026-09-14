@@ -7,7 +7,7 @@
 use crate::ccd::{self, DisplayConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -22,6 +22,9 @@ pub enum ProfileError {
 
     #[error("Profile not found: {0}")]
     NotFound(String),
+
+    #[error("Profile already exists: {0}")]
+    AlreadyExists(String),
 
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -105,7 +108,11 @@ pub fn list_profiles() -> Vec<String> {
 }
 
 /// Save a captured configuration as a named profile.
-pub fn save_profile(name: &str, config: &DisplayConfig) -> Result<()> {
+pub fn profile_exists(name: &str) -> Result<bool> {
+    Ok(profile_path(name)?.exists())
+}
+
+pub fn save_profile(name: &str, config: &DisplayConfig, replace: bool) -> Result<()> {
     let safe = sanitize_name(name).ok_or(ProfileError::InvalidName)?;
     ensure_dir()?;
     let profile = DisplayProfile {
@@ -114,14 +121,29 @@ pub fn save_profile(name: &str, config: &DisplayConfig) -> Result<()> {
         config: config.clone(),
     };
     let json = serde_json::to_string_pretty(&profile)?;
-    fs::write(profiles_dir().join(format!("{safe}.json")), json)?;
+    let path = profiles_dir().join(format!("{safe}.json"));
+    if replace {
+        fs::write(path, json)?;
+    } else {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => file.write_all(json.as_bytes())?,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(ProfileError::AlreadyExists(safe));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(())
 }
 
 /// Capture the current active layout and save it under `name`.
-pub fn save_current(name: &str) -> Result<()> {
+pub fn save_current(name: &str, replace: bool) -> Result<()> {
     let config = ccd::capture_active_config()?;
-    save_profile(name, &config)
+    save_profile(name, &config, replace)
 }
 
 /// Load a profile by name.

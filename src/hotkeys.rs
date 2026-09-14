@@ -2,7 +2,7 @@ use crate::config::{AppConfig, HotkeyActionSpec, build_hotkey_map};
 use cosmic::iced::futures::SinkExt;
 use cosmic::iced::{Subscription, stream};
 use global_hotkey::hotkey::HotKey;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -47,6 +47,17 @@ impl HotkeyManager {
         }
         self.registered_hotkeys.clear();
 
+        if !config.hotkeys_enabled {
+            self.action_map = Arc::new(HashMap::new());
+            self.status = config
+                .hotkeys
+                .hotkeys
+                .iter()
+                .map(|hotkey| (hotkey.id.clone(), false))
+                .collect();
+            return;
+        }
+
         // Build new hotkey map and register each entry.
         let hk_map = build_hotkey_map(&config.hotkeys);
         let mut action_map = HashMap::new();
@@ -87,6 +98,10 @@ impl HotkeyManager {
     /// currently-registered hotkeys so the polling subscription is not
     /// restarted.
     pub fn rebuild_action_map(&mut self, config: &AppConfig) {
+        if !config.hotkeys_enabled {
+            self.action_map = Arc::new(HashMap::new());
+            return;
+        }
         let registered: HashSet<u32> = self.registered_hotkeys.iter().map(|h| h.id()).collect();
         let hk_map = build_hotkey_map(&config.hotkeys);
         let mut action_map = HashMap::new();
@@ -116,39 +131,67 @@ impl HotkeyManager {
 /// Identity/data wrapper for the hotkey subscription. Hashing the set of
 /// registered hotkey ids ensures the subscription restarts when the bindings
 /// change.
-struct HotkeyData(Vec<u32>);
+struct HotkeyData {
+    generation: u64,
+    registered_ids: Vec<u32>,
+}
 
 impl Hash for HotkeyData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        self.generation.hash(state);
+        self.registered_ids.hash(state);
     }
+}
+
+fn should_emit(registered_ids: &[u32], event_id: u32, state: HotKeyState) -> bool {
+    state == HotKeyState::Pressed && registered_ids.binary_search(&event_id).is_ok()
 }
 
 /// Create an iced `Subscription` that polls global hotkey events.
 ///
 /// The subscription emits the triggered hotkey's OS id whenever a registered
 /// hotkey is pressed. The caller resolves the current action chain by id.
-pub fn hotkey_subscription(mut registered_ids: Vec<u32>) -> Subscription<u32> {
+pub fn hotkey_subscription(mut registered_ids: Vec<u32>, generation: u64) -> Subscription<u32> {
     registered_ids.sort_unstable();
     registered_ids.dedup();
 
-    Subscription::run_with(HotkeyData(registered_ids), |data| {
-        let registered_ids = data.0.clone();
-        stream::channel(
-            16,
-            move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<u32>| async move {
-                let receiver = GlobalHotKeyEvent::receiver();
-                loop {
-                    // Drain all pending events
-                    while let Ok(event) = receiver.try_recv() {
-                        if registered_ids.binary_search(&event.id()).is_ok() {
-                            let _ = emitter.send(event.id()).await;
+    Subscription::run_with(
+        HotkeyData {
+            generation,
+            registered_ids,
+        },
+        |data| {
+            let registered_ids = data.registered_ids.clone();
+            stream::channel(
+                16,
+                move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<u32>| async move {
+                    let receiver = GlobalHotKeyEvent::receiver();
+                    for _ in receiver.try_iter() {}
+                    loop {
+                        while let Ok(event) = receiver.try_recv() {
+                            if should_emit(&registered_ids, event.id(), event.state)
+                                && emitter.send(event.id()).await.is_err()
+                            {
+                                return;
+                            }
                         }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    // Poll at 100ms intervals to reduce overhead while maintaining responsiveness
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            },
-        )
-    })
+                },
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscription_emits_only_registered_press_events() {
+        let ids = [7, 42];
+        assert!(should_emit(&ids, 7, HotKeyState::Pressed));
+        assert!(!should_emit(&ids, 7, HotKeyState::Released));
+        assert!(!should_emit(&ids, 8, HotKeyState::Pressed));
+    }
 }
