@@ -11,7 +11,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DdcError {
-    #[error("No monitors with DDC/CI support found. Ensure your monitor supports DDC/CI and it is enabled.")]
+    #[error(
+        "No monitors with DDC/CI support found. Ensure your monitor supports DDC/CI and it is enabled."
+    )]
     NoMonitorsFound,
 
     #[error("Monitor with ID {0} not found")]
@@ -88,7 +90,6 @@ impl InputSource {
             other => InputSource::Custom(other),
         }
     }
-
 }
 
 impl fmt::Display for InputSource {
@@ -196,8 +197,7 @@ pub struct MonitorState {
 
 /// Enumerate all DDC/CI monitors, returning their handles.
 fn get_ddc_monitors() -> Result<Vec<Monitor>> {
-    let monitors =
-        Monitor::enumerate().map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
+    let monitors = Monitor::enumerate().map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
     if monitors.is_empty() {
         return Err(DdcError::NoMonitorsFound);
     }
@@ -243,7 +243,6 @@ pub fn detect_monitors() -> Result<Vec<MonitorInfo>> {
     Ok(result)
 }
 
-
 /// Set brightness for the given 1-indexed monitor.
 pub fn set_brightness(monitor_id: u32, value: u16) -> Result<()> {
     let mut monitors = get_ddc_monitors()?;
@@ -254,7 +253,6 @@ pub fn set_brightness(monitor_id: u32, value: u16) -> Result<()> {
     Ok(())
 }
 
-
 /// Set contrast for the given 1-indexed monitor.
 pub fn set_contrast(monitor_id: u32, value: u16) -> Result<()> {
     let mut monitors = get_ddc_monitors()?;
@@ -264,7 +262,6 @@ pub fn set_contrast(monitor_id: u32, value: u16) -> Result<()> {
         .map_err(|e| DdcError::DdcCommunication(e.to_string()))?;
     Ok(())
 }
-
 
 /// Set the input source for the given 1-indexed monitor.
 pub fn set_input_source(monitor_id: u32, source: InputSource) -> Result<()> {
@@ -323,18 +320,16 @@ pub fn read_monitor_state(monitor_id: u32, info: MonitorInfo) -> Result<MonitorS
         };
 
     // Read contrast
-    let (contrast, contrast_max, contrast_read_error) =
-        match mon.get_vcp_feature(VCP_CONTRAST) {
-            Ok(val) => (val.value(), val.maximum(), None),
-            Err(error) => (0, 100, Some(error.to_string())),
-        };
+    let (contrast, contrast_max, contrast_read_error) = match mon.get_vcp_feature(VCP_CONTRAST) {
+        Ok(val) => (val.value(), val.maximum(), None),
+        Err(error) => (0, 100, Some(error.to_string())),
+    };
 
     // Read input source
-    let (input_source, input_source_read_error) =
-        match mon.get_vcp_feature(VCP_INPUT_SOURCE) {
-            Ok(val) => (InputSource::from_vcp_value(val.value()), None),
-            Err(error) => (InputSource::Custom(0), Some(error.to_string())),
-        };
+    let (input_source, input_source_read_error) = match mon.get_vcp_feature(VCP_INPUT_SOURCE) {
+        Ok(val) => (InputSource::from_vcp_value(val.value()), None),
+        Err(error) => (InputSource::Custom(0), Some(error.to_string())),
+    };
 
     Ok(MonitorState {
         info,
