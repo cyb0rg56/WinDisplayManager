@@ -46,14 +46,20 @@ pub enum Page {
 pub enum Message {
     // Monitor controls
     RefreshMonitors,
-    MonitorsDetected(Vec<MonitorInfo>),
-    MonitorStateLoaded(u32, Box<MonitorState>),
+    RetryMonitor(u32),
+    MonitorsDetected(u64, Vec<MonitorInfo>),
+    MonitorStateLoaded(u64, u64, u32, Box<MonitorState>, MonitorValueRevisions),
+    MonitorStateFailed(u64, u64, u32, String),
     SetBrightness(u32, u16),
     SetContrast(u32, u16),
     SelectInputSource(u32, usize),        // monitor_id, index into INPUT_SOURCES
-    BrightnessApplied(u32, u16),
-    ContrastApplied(u32, u16),
-    InputSourceApplied(u32, InputSource),
+    SetInputSource(u32, InputSource),
+    BrightnessApplied(u64, u32, u16),
+    BrightnessFailed(u64, u32, u16, String),
+    ContrastApplied(u64, u32, u16),
+    ContrastFailed(u64, u32, u16, String),
+    InputSourceApplied(u64, u32, InputSource),
+    InputSourceFailed(u64, u32, InputSource, String),
     PowerModeApplied(u32, PowerMode),
     CustomVcpApplied(u32, u8, u16),
     // Debounced slider changes
@@ -65,6 +71,7 @@ pub enum Message {
     HotkeyTriggered(Vec<HotkeyActionSpec>),
     ToggleHotkeys(bool),
     AddHotkey,
+    ToggleHotkeyEditor(String),
     DeleteHotkey(String),
     StartRecording(String),
     CancelRecording,
@@ -92,6 +99,8 @@ pub enum Message {
     ProfileNameInput(String),
     SaveCurrentProfile(String),
     ApplyProfile(String),
+    RequestDeleteProfile(String),
+    CancelDeleteProfile,
     DeleteProfile(String),
     ProfileApplied(String),
     AddProfileHotkey(String),
@@ -125,6 +134,13 @@ pub enum RecordingState {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MonitorValueRevisions {
+    brightness: u64,
+    contrast: u64,
+    input_source: u64,
+}
+
 
 // ---------------------------------------------------------------------------
 // Application model
@@ -133,7 +149,16 @@ pub enum RecordingState {
 pub struct AppModel {
     core: Core,
     nav: nav_bar::Model,
+    monitor_generation: u64,
+    monitor_read_sequence: u64,
+    operation_sequence: u64,
+    detected_monitors: Vec<MonitorInfo>,
     monitors: Vec<MonitorState>,
+    monitor_load_errors: HashMap<u32, String>,
+    monitor_read_requests: HashMap<u32, u64>,
+    monitor_value_revisions: HashMap<u32, MonitorValueRevisions>,
+    ddc_operation_lock: Arc<tokio::sync::Mutex<()>>,
+    operation_generations: HashMap<u64, u64>,
     config: AppConfig,
     hotkey_manager: Option<HotkeyManager>,
     hotkey_action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
@@ -141,14 +166,22 @@ pub struct AppModel {
     hotkey_status: HashMap<String, bool>,
     status_message: String,
     recording_state: RecordingState,
+    expanded_hotkey: Option<String>,
     about: widget::about::About,
     // Debounce state for sliders
-    pending_brightness: Option<(u32, u16)>,
-    pending_contrast: Option<(u32, u16)>,
+    pending_brightness: HashMap<u32, u16>,
+    pending_contrast: HashMap<u32, u16>,
+    applying_brightness: HashMap<u32, (u64, u16)>,
+    applying_contrast: HashMap<u32, (u64, u16)>,
+    applying_input_source: HashMap<u32, (u64, InputSource)>,
+    confirmed_brightness: HashMap<u32, u16>,
+    confirmed_contrast: HashMap<u32, u16>,
+    confirmed_input_source: HashMap<u32, InputSource>,
     // Saved monitor-layout profiles (file stems)
     profiles: Vec<String>,
     // Text input for naming a new profile
     profile_name_input: String,
+    pending_profile_delete: Option<String>,
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
 }
@@ -170,6 +203,105 @@ const INPUT_SOURCES: &[InputSource] = &[
 
 fn input_source_index(source: &InputSource) -> Option<usize> {
     INPUT_SOURCES.iter().position(|s| s == source)
+}
+
+fn take_pending_change(
+    pending: &mut HashMap<u32, u16>,
+    monitor_id: u32,
+    value: u16,
+) -> bool {
+    if pending.get(&monitor_id).copied() != Some(value) {
+        return false;
+    }
+
+    pending.remove(&monitor_id);
+    true
+}
+
+fn take_current_operation<T: Copy + PartialEq>(
+    applying: &mut HashMap<u32, (u64, T)>,
+    monitor_id: u32,
+    operation_id: u64,
+    value: T,
+) -> bool {
+    if applying.get(&monitor_id).copied() != Some((operation_id, value)) {
+        return false;
+    }
+
+    applying.remove(&monitor_id);
+    true
+}
+
+impl AppModel {
+    fn begin_monitor_read(&mut self, monitor_id: u32) -> (u64, MonitorValueRevisions) {
+        self.monitor_read_sequence = self.monitor_read_sequence.wrapping_add(1);
+        let request_id = self.monitor_read_sequence;
+        self.monitor_read_requests.insert(monitor_id, request_id);
+        let revisions = self
+            .monitor_value_revisions
+            .get(&monitor_id)
+            .copied()
+            .unwrap_or_default();
+        (request_id, revisions)
+    }
+
+    fn monitor_read_is_current(&self, monitor_id: u32, request_id: u64) -> bool {
+        self.monitor_read_requests.get(&monitor_id) == Some(&request_id)
+    }
+
+    fn bump_brightness_revision(&mut self, monitor_id: u32) {
+        let revisions = self.monitor_value_revisions.entry(monitor_id).or_default();
+        revisions.brightness = revisions.brightness.wrapping_add(1);
+    }
+
+    fn bump_contrast_revision(&mut self, monitor_id: u32) {
+        let revisions = self.monitor_value_revisions.entry(monitor_id).or_default();
+        revisions.contrast = revisions.contrast.wrapping_add(1);
+    }
+
+    fn bump_input_source_revision(&mut self, monitor_id: u32) {
+        let revisions = self.monitor_value_revisions.entry(monitor_id).or_default();
+        revisions.input_source = revisions.input_source.wrapping_add(1);
+    }
+}
+
+fn read_monitor_state_task(
+    generation: u64,
+    request_id: u64,
+    info: MonitorInfo,
+    revisions: MonitorValueRevisions,
+    ddc_operation_lock: Arc<tokio::sync::Mutex<()>>,
+) -> cosmic::app::Task<Message> {
+    let monitor_id = info.id;
+    cosmic::app::Task::perform(
+        async move {
+            let _guard = ddc_operation_lock.lock().await;
+            tokio::task::spawn_blocking(move || ddc::read_monitor_state(monitor_id, info)).await
+        },
+        move |result| match result {
+            Ok(Ok(state)) => {
+                cosmic::Action::App(Message::MonitorStateLoaded(
+                    generation,
+                    request_id,
+                    monitor_id,
+                    Box::new(state),
+                    revisions,
+                ))
+            }
+            Ok(Err(error)) => cosmic::Action::App(Message::MonitorStateFailed(
+                generation,
+                request_id,
+                monitor_id,
+                error.to_string(),
+            )),
+            Err(error) => cosmic::Action::App(Message::MonitorStateFailed(
+                generation,
+                request_id,
+                monitor_id,
+                format!("Task join error: {error}"),
+            )),
+        },
+    )
 }
 
 // List of power modes shown in the hotkey action dropdown
@@ -249,10 +381,11 @@ fn key_to_string(key: &Key) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::key_to_string;
+    use super::{key_to_string, take_current_operation, take_pending_change};
     use crate::config::HotkeyBinding;
     use cosmic::iced::keyboard::{key::Named, Key};
     use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    use std::collections::HashMap;
 
     #[test]
     fn extended_function_keys_convert_to_hotkeys() {
@@ -287,6 +420,32 @@ mod tests {
                 assert_eq!(binding.to_hotkey(), Some(HotKey::new(modifiers, code)));
             }
         }
+    }
+
+    #[test]
+    fn pending_changes_are_independent_per_monitor() {
+        let mut pending = HashMap::from([(1, 35), (2, 70)]);
+
+        assert!(take_pending_change(&mut pending, 1, 35));
+        assert_eq!(pending.get(&2), Some(&70));
+    }
+
+    #[test]
+    fn stale_pending_change_does_not_replace_latest_value() {
+        let mut pending = HashMap::from([(1, 60)]);
+
+        assert!(!take_pending_change(&mut pending, 1, 40));
+        assert_eq!(pending.get(&1), Some(&60));
+    }
+
+    #[test]
+    fn stale_same_value_operation_does_not_clear_newer_request() {
+        let mut applying = HashMap::from([(1, (2, 50))]);
+
+        assert!(!take_current_operation(&mut applying, 1, 1, 50));
+        assert_eq!(applying.get(&1), Some(&(2, 50)));
+        assert!(take_current_operation(&mut applying, 1, 2, 50));
+        assert!(!applying.contains_key(&1));
     }
 }
 
@@ -365,18 +524,35 @@ impl cosmic::Application for AppModel {
         let mut app = AppModel {
             core,
             nav,
+            monitor_generation: 0,
+            monitor_read_sequence: 0,
+            operation_sequence: 0,
+            detected_monitors: Vec::new(),
             monitors: Vec::new(),
+            monitor_load_errors: HashMap::new(),
+            monitor_read_requests: HashMap::new(),
+            monitor_value_revisions: HashMap::new(),
+            ddc_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            operation_generations: HashMap::new(),
             config,
             hotkey_manager,
             hotkey_action_map,
             hotkey_status,
             status_message: "Starting...".into(),
             recording_state: RecordingState::NotRecording,
+            expanded_hotkey: None,
             about,
-            pending_brightness: None,
-            pending_contrast: None,
+            pending_brightness: HashMap::new(),
+            pending_contrast: HashMap::new(),
+            applying_brightness: HashMap::new(),
+            applying_contrast: HashMap::new(),
+            applying_input_source: HashMap::new(),
+            confirmed_brightness: HashMap::new(),
+            confirmed_contrast: HashMap::new(),
+            confirmed_input_source: HashMap::new(),
             profiles: Vec::new(),
             profile_name_input: String::new(),
+            pending_profile_delete: None,
             tray,
         };
 
@@ -478,18 +654,72 @@ impl cosmic::Application for AppModel {
         match message {
             // -- Monitor detection ------------------------------------------
             Message::RefreshMonitors => {
+                self.monitor_generation = self.monitor_generation.wrapping_add(1);
+                let generation = self.monitor_generation;
+                let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                 self.status_message = "Detecting monitors...".into();
                 return cosmic::app::Task::perform(
-                    async { tokio::task::spawn_blocking(ddc::detect_monitors).await },
-                    |result| match result {
-                        Ok(Ok(monitors)) => cosmic::Action::App(Message::MonitorsDetected(monitors)),
+                    async move {
+                        let _guard = ddc_operation_lock.lock().await;
+                        tokio::task::spawn_blocking(ddc::detect_monitors).await
+                    },
+                    move |result| match result {
+                        Ok(Ok(monitors)) => {
+                            cosmic::Action::App(Message::MonitorsDetected(generation, monitors))
+                        }
                         Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("DDC detection error: {e}"))),
                         Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
                     },
                 );
             }
 
-            Message::MonitorsDetected(infos) => {
+            Message::RetryMonitor(monitor_id) => {
+                let Some(info) = self
+                    .detected_monitors
+                    .iter()
+                    .find(|info| info.id == monitor_id)
+                    .cloned()
+                else {
+                    return self.update(Message::RefreshMonitors);
+                };
+
+                self.monitor_load_errors.remove(&monitor_id);
+                let (request_id, revisions) = self.begin_monitor_read(monitor_id);
+                self.status_message = format!("Reading monitor {monitor_id}...");
+                return read_monitor_state_task(
+                    self.monitor_generation,
+                    request_id,
+                    info,
+                    revisions,
+                    Arc::clone(&self.ddc_operation_lock),
+                );
+            }
+
+            Message::MonitorsDetected(generation, infos) => {
+                if generation != self.monitor_generation {
+                    return cosmic::app::Task::none();
+                }
+                let preserve_active_page = if self.detected_monitors.is_empty() {
+                    None
+                } else {
+                    self.nav.active_data::<Page>().cloned()
+                };
+
+                self.detected_monitors = infos.clone();
+                self.monitors.clear();
+                self.monitor_load_errors.clear();
+                self.pending_brightness.clear();
+                self.pending_contrast.clear();
+                self.applying_brightness.clear();
+                self.applying_contrast.clear();
+                self.applying_input_source.clear();
+                self.confirmed_brightness.clear();
+                self.confirmed_contrast.clear();
+                self.confirmed_input_source.clear();
+                self.monitor_read_requests.clear();
+                self.monitor_value_revisions.clear();
+                self.operation_generations.clear();
+
                 // Rebuild nav bar
                 self.nav = nav_bar::Model::default();
                 for info in &infos {
@@ -524,8 +754,10 @@ impl cosmic::Application for AppModel {
                     .text("About")
                     .data::<Page>(Page::About);
 
-                // Activate first monitor
-                self.nav.activate_position(0);
+                let active_position = preserve_active_page
+                    .and_then(|page| self.nav_position_of(page))
+                    .unwrap_or(0);
+                self.nav.activate_position(active_position);
 
                 self.status_message =
                     format!("{} monitor(s) detected", infos.len());
@@ -533,37 +765,80 @@ impl cosmic::Application for AppModel {
                 // Kick off state reads for each monitor
                 let mut tasks = Vec::new();
                 for info in infos {
-                    let mid = info.id;
-                    tasks.push(cosmic::app::Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                ddc::read_monitor_state(mid, info)
-                            })
-                            .await
-                        },
-                        move |result| match result {
-                            Ok(Ok(state)) => {
-                                cosmic::Action::App(Message::MonitorStateLoaded(mid, Box::new(state)))
-                            }
-                            Ok(Err(e)) => {
-                                cosmic::Action::App(Message::Error(format!("Monitor {mid} read error: {e}")))
-                            }
-                            Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                        },
+                    let (request_id, revisions) = self.begin_monitor_read(info.id);
+                    tasks.push(read_monitor_state_task(
+                        generation,
+                        request_id,
+                        info,
+                        revisions,
+                        Arc::clone(&self.ddc_operation_lock),
                     ));
                 }
                 return cosmic::app::Task::batch(tasks);
             }
 
-            Message::MonitorStateLoaded(id, state) => {
-                // Upsert
-                if let Some(existing) = self.monitors.iter_mut().find(|m| m.info.id == id)
+            Message::MonitorStateLoaded(generation, request_id, id, state, revisions) => {
+                if generation != self.monitor_generation
+                    || !self.monitor_read_is_current(id, request_id)
                 {
-                    *existing = *state;
+                    return cosmic::app::Task::none();
+                }
+                self.monitor_load_errors.remove(&id);
+                let state = *state;
+                let current_revisions = self
+                    .monitor_value_revisions
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_default();
+
+                if let Some(existing) = self.monitors.iter_mut().find(|m| m.info.id == id) {
+                    existing.info = state.info;
+                    if current_revisions.brightness == revisions.brightness {
+                        existing.brightness = state.brightness;
+                        existing.brightness_max = state.brightness_max;
+                        existing.brightness_read_error = state.brightness_read_error;
+                        if existing.brightness_read_error.is_none() {
+                            self.confirmed_brightness.insert(id, existing.brightness);
+                        }
+                    }
+                    if current_revisions.contrast == revisions.contrast {
+                        existing.contrast = state.contrast;
+                        existing.contrast_max = state.contrast_max;
+                        existing.contrast_read_error = state.contrast_read_error;
+                        if existing.contrast_read_error.is_none() {
+                            self.confirmed_contrast.insert(id, existing.contrast);
+                        }
+                    }
+                    if current_revisions.input_source == revisions.input_source {
+                        existing.input_source = state.input_source;
+                        existing.input_source_read_error = state.input_source_read_error;
+                        if existing.input_source_read_error.is_none() {
+                            self.confirmed_input_source.insert(id, existing.input_source);
+                        }
+                    }
                 } else {
-                    self.monitors.push(*state);
+                    if state.brightness_read_error.is_none() {
+                        self.confirmed_brightness.insert(id, state.brightness);
+                    }
+                    if state.contrast_read_error.is_none() {
+                        self.confirmed_contrast.insert(id, state.contrast);
+                    }
+                    if state.input_source_read_error.is_none() {
+                        self.confirmed_input_source.insert(id, state.input_source);
+                    }
+                    self.monitors.push(state);
                 }
                 self.monitors.sort_by_key(|m| m.info.id);
+            }
+
+            Message::MonitorStateFailed(generation, request_id, id, error) => {
+                if generation != self.monitor_generation
+                    || !self.monitor_read_is_current(id, request_id)
+                {
+                    return cosmic::app::Task::none();
+                }
+                self.monitor_load_errors.insert(id, error.clone());
+                self.status_message = format!("Could not read monitor {id}: {error}");
             }
 
             // -- Brightness -------------------------------------------------
@@ -573,7 +848,7 @@ impl cosmic::Application for AppModel {
                     m.brightness = value;
                 }
                 // Store pending change and debounce
-                self.pending_brightness = Some((monitor_id, value));
+                self.pending_brightness.insert(monitor_id, value);
                 
                 // Schedule debounced application after 150ms
                 return cosmic::app::Task::perform(
@@ -587,11 +862,8 @@ impl cosmic::Application for AppModel {
             
             Message::ApplyBrightnessDebounced(monitor_id, value) => {
                 // Only apply if this is still the pending value
-                if let Some((pending_id, pending_val)) = self.pending_brightness {
-                    if pending_id == monitor_id && pending_val == value {
-                        self.pending_brightness = None;
-                        return self.update(Message::SetBrightness(monitor_id, value));
-                    }
+                if take_pending_change(&mut self.pending_brightness, monitor_id, value) {
+                    return self.update(Message::SetBrightness(monitor_id, value));
                 }
             }
             
@@ -600,23 +872,98 @@ impl cosmic::Application for AppModel {
                 if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
                     m.brightness = value;
                 }
+                self.bump_brightness_revision(monitor_id);
+                self.operation_sequence = self.operation_sequence.wrapping_add(1);
+                let operation_id = self.operation_sequence;
+                self.operation_generations
+                    .insert(operation_id, self.monitor_generation);
+                self.applying_brightness
+                    .insert(monitor_id, (operation_id, value));
+                let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                 return cosmic::app::Task::perform(
                     async move {
+                        let _guard = ddc_operation_lock.lock().await;
                         tokio::task::spawn_blocking(move || {
                             ddc::set_brightness(monitor_id, value)
                         })
                         .await
                     },
                     move |result| match result {
-                        Ok(Ok(())) => cosmic::Action::App(Message::BrightnessApplied(monitor_id, value)),
-                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Brightness error: {e}"))),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                        Ok(Ok(())) => cosmic::Action::App(Message::BrightnessApplied(
+                            operation_id,
+                            monitor_id,
+                            value,
+                        )),
+                        Ok(Err(error)) => cosmic::Action::App(Message::BrightnessFailed(
+                            operation_id,
+                            monitor_id,
+                            value,
+                            error.to_string(),
+                        )),
+                        Err(error) => cosmic::Action::App(Message::BrightnessFailed(
+                            operation_id,
+                            monitor_id,
+                            value,
+                            format!("Task join error: {error}"),
+                        )),
                     },
                 );
             }
 
-            Message::BrightnessApplied(_monitor_id, _value) => {
-                // Already optimistically set
+            Message::BrightnessApplied(operation_id, monitor_id, value) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                self.confirmed_brightness.insert(monitor_id, value);
+                if take_current_operation(
+                    &mut self.applying_brightness,
+                    monitor_id,
+                    operation_id,
+                    value,
+                ) && let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                    && monitor.brightness == value
+                {
+                    monitor.brightness_read_error = None;
+                }
+            }
+
+            Message::BrightnessFailed(operation_id, monitor_id, value, error) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                if take_current_operation(
+                    &mut self.applying_brightness,
+                    monitor_id,
+                    operation_id,
+                    value,
+                ) {
+                    if let Some(confirmed) = self.confirmed_brightness.get(&monitor_id).copied()
+                        && let Some(monitor) = self
+                            .monitors
+                            .iter_mut()
+                            .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.brightness == value
+                    {
+                        monitor.brightness = confirmed;
+                    } else if let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.brightness == value
+                    {
+                        monitor.brightness_read_error = Some(
+                            "The last confirmed brightness value is unavailable".into(),
+                        );
+                    }
+                    self.status_message = format!("Brightness update failed: {error}");
+                }
             }
 
             // -- Contrast ---------------------------------------------------
@@ -626,7 +973,7 @@ impl cosmic::Application for AppModel {
                     m.contrast = value;
                 }
                 // Store pending change and debounce
-                self.pending_contrast = Some((monitor_id, value));
+                self.pending_contrast.insert(monitor_id, value);
                 
                 // Schedule debounced application after 150ms
                 return cosmic::app::Task::perform(
@@ -640,11 +987,8 @@ impl cosmic::Application for AppModel {
             
             Message::ApplyContrastDebounced(monitor_id, value) => {
                 // Only apply if this is still the pending value
-                if let Some((pending_id, pending_val)) = self.pending_contrast {
-                    if pending_id == monitor_id && pending_val == value {
-                        self.pending_contrast = None;
-                        return self.update(Message::SetContrast(monitor_id, value));
-                    }
+                if take_pending_change(&mut self.pending_contrast, monitor_id, value) {
+                    return self.update(Message::SetContrast(monitor_id, value));
                 }
             }
             
@@ -653,50 +997,208 @@ impl cosmic::Application for AppModel {
                 if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
                     m.contrast = value;
                 }
+                self.bump_contrast_revision(monitor_id);
+                self.operation_sequence = self.operation_sequence.wrapping_add(1);
+                let operation_id = self.operation_sequence;
+                self.operation_generations
+                    .insert(operation_id, self.monitor_generation);
+                self.applying_contrast
+                    .insert(monitor_id, (operation_id, value));
+                let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                 return cosmic::app::Task::perform(
                     async move {
+                        let _guard = ddc_operation_lock.lock().await;
                         tokio::task::spawn_blocking(move || {
                             ddc::set_contrast(monitor_id, value)
                         })
                         .await
                     },
                     move |result| match result {
-                        Ok(Ok(())) => cosmic::Action::App(Message::ContrastApplied(monitor_id, value)),
-                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Contrast error: {e}"))),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
+                        Ok(Ok(())) => cosmic::Action::App(Message::ContrastApplied(
+                            operation_id,
+                            monitor_id,
+                            value,
+                        )),
+                        Ok(Err(error)) => cosmic::Action::App(Message::ContrastFailed(
+                            operation_id,
+                            monitor_id,
+                            value,
+                            error.to_string(),
+                        )),
+                        Err(error) => cosmic::Action::App(Message::ContrastFailed(
+                            operation_id,
+                            monitor_id,
+                            value,
+                            format!("Task join error: {error}"),
+                        )),
                     },
                 );
             }
 
-            Message::ContrastApplied(_monitor_id, _value) => {}
+            Message::ContrastApplied(operation_id, monitor_id, value) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                self.confirmed_contrast.insert(monitor_id, value);
+                if take_current_operation(
+                    &mut self.applying_contrast,
+                    monitor_id,
+                    operation_id,
+                    value,
+                ) && let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                    && monitor.contrast == value
+                {
+                    monitor.contrast_read_error = None;
+                }
+            }
+
+            Message::ContrastFailed(operation_id, monitor_id, value, error) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                if take_current_operation(
+                    &mut self.applying_contrast,
+                    monitor_id,
+                    operation_id,
+                    value,
+                ) {
+                    if let Some(confirmed) = self.confirmed_contrast.get(&monitor_id).copied()
+                        && let Some(monitor) = self
+                            .monitors
+                            .iter_mut()
+                            .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.contrast == value
+                    {
+                        monitor.contrast = confirmed;
+                    } else if let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.contrast == value
+                    {
+                        monitor.contrast_read_error = Some(
+                            "The last confirmed contrast value is unavailable".into(),
+                        );
+                    }
+                    self.status_message = format!("Contrast update failed: {error}");
+                }
+            }
 
             // -- Input source -----------------------------------------------
             Message::SelectInputSource(monitor_id, idx) => {
                 if let Some(&source) = INPUT_SOURCES.get(idx) {
-                    if let Some(m) =
-                        self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
-                    {
-                        m.input_source = source;
-                    }
-                    return cosmic::app::Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                ddc::set_input_source(monitor_id, source)
-                            })
-                            .await
-                        },
-                        move |result| match result {
-                            Ok(Ok(())) => cosmic::Action::App(Message::InputSourceApplied(monitor_id, source)),
-                            Ok(Err(e)) => {
-                                cosmic::Action::App(Message::Error(format!("Input source error: {e}")))
-                            }
-                            Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                        },
-                    );
+                    return self.update(Message::SetInputSource(monitor_id, source));
                 }
             }
 
-            Message::InputSourceApplied(_monitor_id, _source) => {}
+            Message::SetInputSource(monitor_id, source) => {
+                if let Some(monitor) = self
+                    .monitors
+                    .iter_mut()
+                    .find(|monitor| monitor.info.id == monitor_id)
+                {
+                    monitor.input_source = source;
+                }
+                self.bump_input_source_revision(monitor_id);
+                self.operation_sequence = self.operation_sequence.wrapping_add(1);
+                let operation_id = self.operation_sequence;
+                self.operation_generations
+                    .insert(operation_id, self.monitor_generation);
+                self.applying_input_source
+                    .insert(monitor_id, (operation_id, source));
+                let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
+                return cosmic::app::Task::perform(
+                    async move {
+                        let _guard = ddc_operation_lock.lock().await;
+                        tokio::task::spawn_blocking(move || {
+                            ddc::set_input_source(monitor_id, source)
+                        })
+                        .await
+                    },
+                    move |result| match result {
+                        Ok(Ok(())) => cosmic::Action::App(Message::InputSourceApplied(
+                            operation_id,
+                            monitor_id,
+                            source,
+                        )),
+                        Ok(Err(error)) => cosmic::Action::App(Message::InputSourceFailed(
+                            operation_id,
+                            monitor_id,
+                            source,
+                            error.to_string(),
+                        )),
+                        Err(error) => cosmic::Action::App(Message::InputSourceFailed(
+                            operation_id,
+                            monitor_id,
+                            source,
+                            format!("Task join error: {error}"),
+                        )),
+                    },
+                );
+            }
+
+            Message::InputSourceApplied(operation_id, monitor_id, source) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                self.confirmed_input_source.insert(monitor_id, source);
+                if take_current_operation(
+                    &mut self.applying_input_source,
+                    monitor_id,
+                    operation_id,
+                    source,
+                ) && let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                    && monitor.input_source == source
+                {
+                    monitor.input_source_read_error = None;
+                }
+            }
+
+            Message::InputSourceFailed(operation_id, monitor_id, source, error) => {
+                if self.operation_generations.remove(&operation_id)
+                    != Some(self.monitor_generation)
+                {
+                    return cosmic::app::Task::none();
+                }
+                if take_current_operation(
+                    &mut self.applying_input_source,
+                    monitor_id,
+                    operation_id,
+                    source,
+                ) {
+                    if let Some(confirmed) = self.confirmed_input_source.get(&monitor_id).copied()
+                        && let Some(monitor) = self
+                            .monitors
+                            .iter_mut()
+                            .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.input_source == source
+                    {
+                        monitor.input_source = confirmed;
+                    } else if let Some(monitor) = self
+                        .monitors
+                        .iter_mut()
+                        .find(|monitor| monitor.info.id == monitor_id)
+                        && monitor.input_source == source
+                    {
+                        monitor.input_source_read_error = Some(
+                            "The last confirmed input source is unavailable".into(),
+                        );
+                    }
+                    self.status_message = format!("Input source update failed: {error}");
+                }
+            }
 
             Message::PowerModeApplied(_monitor_id, _power_mode) => {}
 
@@ -724,6 +1226,7 @@ impl cosmic::Application for AppModel {
                 let hotkey = Hotkey::new_empty();
                 let id = hotkey.id.clone();
                 self.config.hotkeys.hotkeys.push(hotkey);
+                self.expanded_hotkey = Some(id.clone());
                 self.recording_state = RecordingState::Recording {
                     hotkey_id: id,
                     ctrl: false,
@@ -736,8 +1239,19 @@ impl cosmic::Application for AppModel {
                     "New hotkey added. Press a key combination to bind it.".into();
             }
 
+            Message::ToggleHotkeyEditor(id) => {
+                if self.expanded_hotkey.as_deref() == Some(id.as_str()) {
+                    self.expanded_hotkey = None;
+                } else {
+                    self.expanded_hotkey = Some(id);
+                }
+            }
+
             Message::DeleteHotkey(id) => {
                 self.config.hotkeys.hotkeys.retain(|h| h.id != id);
+                if self.expanded_hotkey.as_deref() == Some(id.as_str()) {
+                    self.expanded_hotkey = None;
+                }
                 if matches!(&self.recording_state, RecordingState::Recording { hotkey_id, .. } if hotkey_id == &id)
                 {
                     self.recording_state = RecordingState::NotRecording;
@@ -746,6 +1260,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::StartRecording(hotkey_id) => {
+                self.expanded_hotkey = Some(hotkey_id.clone());
                 self.recording_state = RecordingState::Recording {
                     hotkey_id,
                     ctrl: false,
@@ -941,6 +1456,13 @@ impl cosmic::Application for AppModel {
 
             Message::ProfilesListed(list) => {
                 self.profiles = list;
+                if self
+                    .pending_profile_delete
+                    .as_ref()
+                    .is_some_and(|name| !self.profiles.contains(name))
+                {
+                    self.pending_profile_delete = None;
+                }
                 // Keep the tray menu in sync with the profile list.
                 if let Some((ref tray, _)) = self.tray {
                     tray.update_menu(&self.profiles);
@@ -992,7 +1514,16 @@ impl cosmic::Application for AppModel {
                 return self.update(Message::RefreshMonitors);
             }
 
+            Message::RequestDeleteProfile(name) => {
+                self.pending_profile_delete = Some(name);
+            }
+
+            Message::CancelDeleteProfile => {
+                self.pending_profile_delete = None;
+            }
+
             Message::DeleteProfile(name) => {
+                self.pending_profile_delete = None;
                 return cosmic::app::Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || profiles::delete_profile(&name)).await
@@ -1180,14 +1711,30 @@ impl AppModel {
     /// View for a single monitor page.
     fn view_monitor(&self, monitor_id: u32) -> Element<'_, Message> {
         let space_s = cosmic::theme::spacing().space_s;
+        let space_m = cosmic::theme::spacing().space_m;
 
         let monitor = self.monitors.iter().find(|m| m.info.id == monitor_id);
 
         match monitor {
             None => {
-                widget::container(
-                    widget::text::body("Loading monitor data...")
-                )
+                let content: Element<'_, Message> = if let Some(error) =
+                    self.monitor_load_errors.get(&monitor_id)
+                {
+                    widget::column::with_capacity(3)
+                        .push(widget::text::title3("Could not read this monitor"))
+                        .push(widget::text::body(error))
+                        .push(
+                            widget::button::suggested("Retry")
+                                .on_press(Message::RetryMonitor(monitor_id)),
+                        )
+                        .spacing(space_s)
+                        .align_x(Alignment::Center)
+                        .into()
+                } else {
+                    widget::text::body("Loading monitor data...").into()
+                };
+
+                widget::container(content)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Horizontal::Center)
@@ -1201,15 +1748,15 @@ impl AppModel {
                 } else {
                     mon.info.name.clone()
                 };
-                let header = widget::text::title3(header_label);
+                let header = widget::text::title2(header_label);
 
                 let resolution_text = format!(
-                    "{}x{} at ({}, {}){}",
+                    "{} x {}  |  Position {}, {}{}",
                     mon.info.width,
                     mon.info.height,
                     mon.info.x,
                     mon.info.y,
-                    if mon.info.is_primary { " [Primary]" } else { "" }
+                    if mon.info.is_primary { "  |  Primary display" } else { "" }
                 );
                 let resolution_label = widget::text::caption(resolution_text);
 
@@ -1231,65 +1778,113 @@ impl AppModel {
                     "DVI 2",
                 ];
                 
-                let input_section = cosmic::widget::settings::section()
-                    .title("Input Source")
-                    .add(
-                        cosmic::widget::settings::item::builder("Active input").control(
-                            widget::dropdown(INPUT_SOURCE_LABELS, selected_idx, move |idx| {
-                                Message::SelectInputSource(mid, idx)
-                            }),
-                        ),
-                    );
+                let input_control = widget::dropdown(INPUT_SOURCE_LABELS, selected_idx, move |idx| {
+                    Message::SelectInputSource(mid, idx)
+                });
 
                 // Brightness slider
                 let brightness_val = mon.brightness as f64;
                 let brightness_max = mon.brightness_max.max(1) as f64;
                 let mid_b = mon.info.id;
-                let brightness_section = cosmic::widget::settings::section()
-                    .title("Brightness")
-                    .add(
-                        cosmic::widget::settings::item::builder(format!(
-                            "{} / {}",
-                            mon.brightness, mon.brightness_max
-                        ))
-                        .control(
-                            widget::slider(0.0..=brightness_max, brightness_val, move |v| {
-                                Message::BrightnessSliderChanged(mid_b, v as u16)
-                            })
-                            .width(Length::Fixed(300.0)),
-                        ),
-                    );
-
-                // Contrast slider
                 let contrast_val = mon.contrast as f64;
                 let contrast_max = mon.contrast_max.max(1) as f64;
                 let mid_c = mon.info.id;
-                let contrast_section = cosmic::widget::settings::section()
-                    .title("Contrast")
-                    .add(
-                        cosmic::widget::settings::item::builder(format!(
-                            "{} / {}",
-                            mon.contrast, mon.contrast_max
-                        ))
-                        .control(
-                            widget::slider(0.0..=contrast_max, contrast_val, move |v| {
-                                Message::ContrastSliderChanged(mid_c, v as u16)
-                            })
-                            .width(Length::Fixed(300.0)),
-                        ),
-                    );
+                let brightness_description = if self.applying_brightness.contains_key(&monitor_id) {
+                    format!("{} of {} - Applying...", mon.brightness, mon.brightness_max)
+                } else {
+                    format!("{} of {}", mon.brightness, mon.brightness_max)
+                };
+                let contrast_description = if self.applying_contrast.contains_key(&monitor_id) {
+                    format!("{} of {} - Applying...", mon.contrast, mon.contrast_max)
+                } else {
+                    format!("{} of {}", mon.contrast, mon.contrast_max)
+                };
+                let input_description = if self
+                    .applying_input_source
+                    .contains_key(&monitor_id)
+                {
+                    "Switching the active connection..."
+                } else {
+                    "Switch the active connection for this display"
+                };
+                let mut display_controls = cosmic::widget::settings::section()
+                    .title("Display controls");
 
-                widget::container(
+                display_controls = if mon.brightness_read_error.is_some() {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Brightness")
+                            .description("The display did not return a brightness value")
+                            .control(
+                                widget::button::standard("Retry")
+                                    .on_press(Message::RetryMonitor(monitor_id)),
+                            ),
+                    )
+                } else {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Brightness")
+                            .description(brightness_description)
+                            .control(
+                                widget::slider(0.0..=brightness_max, brightness_val, move |v| {
+                                    Message::BrightnessSliderChanged(mid_b, v as u16)
+                                })
+                                .width(Length::Fill),
+                            ),
+                    )
+                };
+
+                display_controls = if mon.contrast_read_error.is_some() {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Contrast")
+                            .description("The display did not return a contrast value")
+                            .control(
+                                widget::button::standard("Retry")
+                                    .on_press(Message::RetryMonitor(monitor_id)),
+                            ),
+                    )
+                } else {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Contrast")
+                            .description(contrast_description)
+                            .control(
+                                widget::slider(0.0..=contrast_max, contrast_val, move |v| {
+                                    Message::ContrastSliderChanged(mid_c, v as u16)
+                                })
+                                .width(Length::Fill),
+                            ),
+                    )
+                };
+
+                display_controls = if mon.input_source_read_error.is_some() {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Input source")
+                            .description("The display did not return its active input")
+                            .control(
+                                widget::button::standard("Retry")
+                                    .on_press(Message::RetryMonitor(monitor_id)),
+                            ),
+                    )
+                } else {
+                    display_controls.add(
+                        cosmic::widget::settings::item::builder("Input source")
+                            .description(input_description)
+                            .control(input_control),
+                    )
+                };
+
+                let content = widget::container(
                     widget::column::with_capacity(6)
                         .push(header)
                         .push(resolution_label)
-                        .push(input_section)
-                        .push(brightness_section)
-                        .push(contrast_section)
-                        .spacing(space_s)
+                        .push(widget::divider::horizontal::default())
+                        .push(display_controls)
+                        .spacing(space_m)
                         .width(Length::Fill)
                         .max_width(700.0),
                 )
+                .padding([space_s, space_m])
+                .width(Length::Fill);
+
+                widget::scrollable(content)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -1364,10 +1959,42 @@ impl AppModel {
         let is_active = self.hotkey_status.get(&hotkey.id).copied().unwrap_or(false);
         let recording_this =
             matches!(&self.recording_state, RecordingState::Recording { hotkey_id, .. } if hotkey_id == &hotkey.id);
+        let expanded = recording_this || self.expanded_hotkey.as_deref() == Some(hotkey.id.as_str());
+        let status = if hotkey.binding.key.is_empty() {
+            "Unbound"
+        } else if is_active {
+            "Registered"
+        } else {
+            "Unavailable"
+        };
+        let action_count = match hotkey.actions.len() {
+            1 => "1 action".to_string(),
+            count => format!("{count} actions"),
+        };
+        let mut summary = widget::row::with_capacity(2)
+            .push(
+                widget::column::with_capacity(2)
+                    .push(widget::text::body(status))
+                    .push(widget::text::caption(action_count))
+                    .width(Length::Fill),
+            )
+            .spacing(space_s)
+            .align_y(Alignment::Center);
+        if !recording_this {
+            summary = summary.push(
+                widget::button::standard(if expanded { "Collapse" } else { "Edit" })
+                    .on_press(Message::ToggleHotkeyEditor(id.clone())),
+            );
+        }
 
-        let status_dot = widget::text::body(if is_active { "●" } else { "○" });
+        if !expanded {
+            return cosmic::widget::settings::section()
+                .title(hotkey.binding.to_string())
+                .add(widget::container(summary).padding([0, space_s]))
+                .into();
+        }
 
-        let accel_row: Element<'_, Message> = if recording_this {
+        let binding_controls: Element<'_, Message> = if recording_this {
             let (ctrl, alt, shift, win, key) = match &self.recording_state {
                 RecordingState::Recording { ctrl, alt, shift, win, key, .. } => {
                     (*ctrl, *alt, *shift, *win, key.clone())
@@ -1386,9 +2013,7 @@ impl AppModel {
                 .align_y(Alignment::Center)
                 .into()
         } else {
-            widget::row::with_capacity(5)
-                .push(status_dot)
-                .push(widget::text::body(hotkey.binding.to_string()).width(Length::Fill))
+            widget::row::with_capacity(3)
                 .push(widget::button::standard("Record").on_press(Message::StartRecording(id.clone())))
                 .push(widget::button::standard("Clear").on_press(Message::ClearBinding(id.clone())))
                 .push(
@@ -1412,15 +2037,13 @@ impl AppModel {
         );
 
         let content = widget::column::with_capacity(2)
-            // Match the action cards' horizontal padding so the accelerator row's
-            // trailing buttons (Cancel / Delete Hotkey) line up with each action
-            // row's Delete button below.
-            .push(widget::container(accel_row).padding([0, space_s]))
+            .push(widget::container(summary).padding([0, space_s]))
+            .push(widget::container(binding_controls).padding([0, space_s]))
             .push(actions_col)
             .spacing(space_s);
 
         cosmic::widget::settings::section()
-            .title(format!("Hotkey: {}", hotkey.binding))
+            .title(hotkey.binding.to_string())
             .add(content)
             .into()
     }
@@ -1661,9 +2284,7 @@ impl AppModel {
         let space_s = cosmic::theme::spacing().space_s;
 
         let header = widget::text::title3("Settings");
-        let description = widget::text::body(
-            "Configure step sizes and other application settings.",
-        );
+        let description = widget::text::body("Configure application preferences.");
 
         // --- Hotkeys enabled toggle ---
         let hotkeys_section = cosmic::widget::settings::section()
@@ -1677,29 +2298,10 @@ impl AppModel {
                     ),
             );
 
-        // --- Step size ---
-        let step_section = cosmic::widget::settings::section()
-            .title("Step Sizes")
-            .add(
-                cosmic::widget::settings::item::builder(format!(
-                    "Brightness step: {}",
-                    self.config.hotkeys.brightness_step
-                ))
-                .control(widget::text::body("")),
-            )
-            .add(
-                cosmic::widget::settings::item::builder(format!(
-                    "Contrast step: {}",
-                    self.config.hotkeys.contrast_step
-                ))
-                .control(widget::text::body("")),
-            );
-
-        let content = widget::column::with_capacity(4)
+        let content = widget::column::with_capacity(3)
             .push(header)
             .push(description)
             .push(hotkeys_section)
-            .push(step_section)
             .spacing(space_s)
             .width(Length::Fill);
 
@@ -1740,23 +2342,59 @@ impl AppModel {
             items = items.push(widget::text::body("No profiles saved yet."));
         } else {
             for name in &self.profiles {
-                let row = widget::row::with_capacity(4)
-                    .push(widget::text::body(name.clone()).width(Length::Fill))
-                    .push(
-                        widget::button::standard("Apply")
-                            .on_press(Message::ApplyProfile(name.clone())),
-                    )
-                    .push(
-                        widget::button::standard("Set Hotkey")
-                            .on_press(Message::AddProfileHotkey(name.clone())),
-                    )
-                    .push(
-                        widget::button::destructive("Delete")
-                            .on_press(Message::DeleteProfile(name.clone())),
-                    )
-                    .spacing(space_s)
-                    .align_y(Alignment::Center);
-                items = items.push(row);
+                let deleting = self.pending_profile_delete.as_deref() == Some(name.as_str());
+                let item = if deleting {
+                    widget::column::with_capacity(2)
+                        .push(
+                            widget::row::with_capacity(2)
+                                .push(widget::text::body(name.clone()).width(Length::Fill))
+                                .push(widget::text::caption("Delete this profile?"))
+                                .align_y(Alignment::Center),
+                        )
+                        .push(
+                            widget::row::with_capacity(3)
+                                .push(widget::Space::new().width(Length::Fill))
+                                .push(
+                                    widget::button::standard("Cancel")
+                                        .on_press(Message::CancelDeleteProfile),
+                                )
+                                .push(
+                                    widget::button::destructive("Delete")
+                                        .on_press(Message::DeleteProfile(name.clone())),
+                                )
+                                .spacing(space_s)
+                                .align_y(Alignment::Center),
+                        )
+                } else {
+                        widget::column::with_capacity(2)
+                        .push(
+                            widget::row::with_capacity(2)
+                                .push(widget::text::body(name.clone()).width(Length::Fill))
+                                .push(
+                                    widget::button::suggested("Apply")
+                                        .on_press(Message::ApplyProfile(name.clone())),
+                                )
+                                .spacing(space_s)
+                                .align_y(Alignment::Center),
+                        )
+                        .push(
+                            widget::row::with_capacity(3)
+                                .push(widget::Space::new().width(Length::Fill))
+                                .push(
+                                    widget::button::standard("Hotkey")
+                                        .on_press(Message::AddProfileHotkey(name.clone())),
+                                )
+                                .push(
+                                    widget::button::destructive("Delete")
+                                        .on_press(Message::RequestDeleteProfile(name.clone())),
+                                )
+                                .spacing(space_s)
+                                .align_y(Alignment::Center),
+                        )
+                }
+                .spacing(space_s)
+                .width(Length::Fill);
+                items = items.push(item);
             }
         }
         let profiles_section = cosmic::widget::settings::section()
@@ -1873,8 +2511,10 @@ impl AppModel {
 
         if behavior.uses_ddc() {
             for &monitor_id in monitors {
+                let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                 tasks.push(cosmic::app::Task::perform(
                     async move {
+                        let _guard = ddc_operation_lock.lock().await;
                         tokio::task::spawn_blocking(move || {
                             ddc::set_power_mode(monitor_id, PowerMode::Off)
                         })
@@ -1925,6 +2565,18 @@ impl AppModel {
             match action.target {
                 ActionTarget::Brightness => {
                     for monitor_id in monitors {
+                        if action.action_type == ActionType::Offset
+                            && self
+                                .monitors
+                                .iter()
+                                .find(|m| m.info.id == monitor_id)
+                                .is_some_and(|m| m.brightness_read_error.is_some())
+                        {
+                            self.status_message = format!(
+                                "Brightness offset skipped for monitor {monitor_id}: current value unavailable"
+                            );
+                            continue;
+                        }
                         if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
                             let new_val = match action.action_type {
                                 ActionType::Set => (action.value.max(0) as u16).min(m.brightness_max),
@@ -1941,6 +2593,18 @@ impl AppModel {
                 }
                 ActionTarget::Contrast => {
                     for monitor_id in monitors {
+                        if action.action_type == ActionType::Offset
+                            && self
+                                .monitors
+                                .iter()
+                                .find(|m| m.info.id == monitor_id)
+                                .is_some_and(|m| m.contrast_read_error.is_some())
+                        {
+                            self.status_message = format!(
+                                "Contrast offset skipped for monitor {monitor_id}: current value unavailable"
+                            );
+                            continue;
+                        }
                         if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
                             let new_val = match action.action_type {
                                 ActionType::Set => (action.value.max(0) as u16).min(m.contrast_max),
@@ -1971,36 +2635,19 @@ impl AppModel {
                             .collect()
                     };
                     for (monitor_id, input_source) in pairs {
-                        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-                            m.input_source = input_source;
-                        }
-                        tasks.push(cosmic::app::Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || {
-                                    ddc::set_input_source(monitor_id, input_source)
-                                })
-                                .await
-                            },
-                            move |result| match result {
-                                Ok(Ok(())) => cosmic::Action::App(Message::InputSourceApplied(
-                                    monitor_id,
-                                    input_source,
-                                )),
-                                Ok(Err(e)) => cosmic::Action::App(Message::Error(format!(
-                                    "Input switch error: {e}"
-                                ))),
-                                Err(e) => {
-                                    cosmic::Action::App(Message::Error(format!("Task join error: {e}")))
-                                }
-                            },
-                        ));
+                        tasks.push(self.update(Message::SetInputSource(
+                            monitor_id,
+                            input_source,
+                        )));
                     }
                 }
                 ActionTarget::PowerMode => {
                     for monitor_id in monitors {
                         let power_mode = action.power_mode;
+                        let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                         tasks.push(cosmic::app::Task::perform(
                             async move {
+                                let _guard = ddc_operation_lock.lock().await;
                                 tokio::task::spawn_blocking(move || {
                                     ddc::set_power_mode(monitor_id, power_mode)
                                 })
@@ -2025,8 +2672,10 @@ impl AppModel {
                         let code = action.vcp_code;
                         let offset = action.value;
                         let is_offset = action.action_type == ActionType::Offset;
+                        let ddc_operation_lock = Arc::clone(&self.ddc_operation_lock);
                         tasks.push(cosmic::app::Task::perform(
                             async move {
+                                let _guard = ddc_operation_lock.lock().await;
                                 tokio::task::spawn_blocking(move || -> anyhow::Result<u16> {
                                     let value = if is_offset {
                                         let (current, max) = ddc::get_vcp(monitor_id, code)?;

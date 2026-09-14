@@ -182,9 +182,12 @@ pub struct MonitorState {
     pub info: MonitorInfo,
     pub brightness: u16,
     pub brightness_max: u16,
+    pub brightness_read_error: Option<String>,
     pub contrast: u16,
     pub contrast_max: u16,
+    pub contrast_read_error: Option<String>,
     pub input_source: InputSource,
+    pub input_source_read_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -313,30 +316,36 @@ pub fn read_monitor_state(monitor_id: u32, info: MonitorInfo) -> Result<MonitorS
     let mon = &mut monitors[idx];
 
     // Read brightness
-    let (brightness, brightness_max) = match mon.get_vcp_feature(VCP_BRIGHTNESS) {
-        Ok(val) => (val.value(), val.maximum()),
-        Err(_) => (0, 100),
-    };
+    let (brightness, brightness_max, brightness_read_error) =
+        match mon.get_vcp_feature(VCP_BRIGHTNESS) {
+            Ok(val) => (val.value(), val.maximum(), None),
+            Err(error) => (0, 100, Some(error.to_string())),
+        };
 
     // Read contrast
-    let (contrast, contrast_max) = match mon.get_vcp_feature(VCP_CONTRAST) {
-        Ok(val) => (val.value(), val.maximum()),
-        Err(_) => (0, 100),
-    };
+    let (contrast, contrast_max, contrast_read_error) =
+        match mon.get_vcp_feature(VCP_CONTRAST) {
+            Ok(val) => (val.value(), val.maximum(), None),
+            Err(error) => (0, 100, Some(error.to_string())),
+        };
 
     // Read input source
-    let input_source = match mon.get_vcp_feature(VCP_INPUT_SOURCE) {
-        Ok(val) => InputSource::from_vcp_value(val.value()),
-        Err(_) => InputSource::Custom(0),
-    };
+    let (input_source, input_source_read_error) =
+        match mon.get_vcp_feature(VCP_INPUT_SOURCE) {
+            Ok(val) => (InputSource::from_vcp_value(val.value()), None),
+            Err(error) => (InputSource::Custom(0), Some(error.to_string())),
+        };
 
     Ok(MonitorState {
         info,
         brightness,
         brightness_max,
+        brightness_read_error,
         contrast,
         contrast_max,
+        contrast_read_error,
         input_source,
+        input_source_read_error,
     })
 }
 
