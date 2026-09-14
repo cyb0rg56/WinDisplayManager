@@ -71,9 +71,6 @@ pub enum Message {
     HotkeyTriggered(u32),
     ToggleHotkeys(bool),
     AddHotkey,
-    QuickAddBrightness(u32, i32),
-    QuickAddContrast(u32, i32),
-    QuickAddInput(u32, InputSource),
     ToggleHotkeyEditor(String),
     DeleteHotkey(String),
     StartRecording(String),
@@ -898,43 +895,6 @@ impl cosmic::Application for AppModel {
                 self.refresh_hotkey_actions();
             }
 
-            Message::QuickAddBrightness(monitor_id, value) => {
-                self.add_quick_hotkey(HotkeyActionSpec {
-                    action_type: ActionType::Offset,
-                    target: ActionTarget::Brightness,
-                    all_monitors: false,
-                    monitors: vec![monitor_id],
-                    value,
-                    ..Default::default()
-                });
-            }
-
-            Message::QuickAddContrast(monitor_id, value) => {
-                self.add_quick_hotkey(HotkeyActionSpec {
-                    action_type: ActionType::Offset,
-                    target: ActionTarget::Contrast,
-                    all_monitors: false,
-                    monitors: vec![monitor_id],
-                    value,
-                    ..Default::default()
-                });
-            }
-
-            Message::QuickAddInput(monitor_id, input_source) => {
-                self.add_quick_hotkey(HotkeyActionSpec {
-                    action_type: ActionType::Set,
-                    target: ActionTarget::InputSource,
-                    all_monitors: false,
-                    monitors: vec![monitor_id],
-                    input_source,
-                    monitor_inputs: vec![MonitorInput {
-                        monitor_id,
-                        input_source,
-                    }],
-                    ..Default::default()
-                });
-            }
-
             Message::ToggleHotkeyEditor(id) => {
                 if self.expanded_hotkey.as_deref() == Some(&id) {
                     self.expanded_hotkey = None;
@@ -1560,75 +1520,18 @@ impl AppModel {
             .push(widget::Space::new().width(Length::Fill))
             .spacing(space_s);
 
-        let mut quick_add =
-            widget::column::with_capacity(self.detected_monitors.len()).spacing(space_s);
-        for monitor in &self.detected_monitors {
-            let id = monitor.id;
-            let label = if monitor.name.is_empty() {
-                format!("Monitor {id}")
-            } else {
-                monitor.name.clone()
-            };
-            quick_add = quick_add.push(
-                widget::column::with_capacity(2)
-                    .push(widget::text::body(label))
-                    .push(
-                        widget::row::with_capacity(6)
-                            .push(widget::button::standard("Brightness +").on_press(
-                                Message::QuickAddBrightness(
-                                    id,
-                                    self.config.hotkeys.brightness_step as i32,
-                                ),
-                            ))
-                            .push(widget::button::standard("Brightness -").on_press(
-                                Message::QuickAddBrightness(
-                                    id,
-                                    -(self.config.hotkeys.brightness_step as i32),
-                                ),
-                            ))
-                            .push(widget::button::standard("Contrast +").on_press(
-                                Message::QuickAddContrast(
-                                    id,
-                                    self.config.hotkeys.contrast_step as i32,
-                                ),
-                            ))
-                            .push(widget::button::standard("Contrast -").on_press(
-                                Message::QuickAddContrast(
-                                    id,
-                                    -(self.config.hotkeys.contrast_step as i32),
-                                ),
-                            ))
-                            .push(
-                                widget::button::standard("HDMI 1")
-                                    .on_press(Message::QuickAddInput(id, InputSource::Hdmi1)),
-                            )
-                            .push(
-                                widget::button::standard("DisplayPort 1")
-                                    .on_press(Message::QuickAddInput(id, InputSource::Dp1)),
-                            )
-                            .spacing(space_s),
-                    )
-                    .spacing(space_s),
-            );
-        }
-
         let save_label = if self.config_dirty {
             "Save Configuration *"
         } else {
             "Save Configuration"
         };
-        let content = widget::column::with_capacity(7)
+        let content = widget::column::with_capacity(6)
             .push(widget::text::title3("Hotkeys"))
             .push(widget::text::body(
                 "Configure global hotkeys and ordered display actions.",
             ))
             .push(add_row)
             .push(hotkeys)
-            .push(
-                cosmic::widget::settings::section()
-                    .title("Quick Add")
-                    .add(quick_add),
-            )
             .push(widget::button::suggested(save_label).on_press(Message::SaveConfig))
             .spacing(space_s)
             .width(Length::Fill);
@@ -1738,9 +1641,15 @@ impl AppModel {
             .align_y(Alignment::Center);
         let mut fields = widget::column::with_capacity(5)
             .push(
-                cosmic::widget::settings::section()
-                    .title("Actions")
-                    .add(action_row),
+                widget::row::with_capacity(2)
+                    .push(widget::text::body("Actions").width(Length::Fixed(112.0)))
+                    .push(
+                        widget::container(action_row)
+                            .width(Length::Fill)
+                            .align_x(Horizontal::Left),
+                    )
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
             )
             .spacing(space_s);
 
@@ -1752,14 +1661,22 @@ impl AppModel {
             let selected = ActionTarget::ALL
                 .iter()
                 .position(|value| value == &action.target);
-            fields = fields.push(cosmic::widget::settings::section().title("Commands").add(
-                widget::dropdown(targets, selected, {
-                    let id = id.clone();
-                    move |selected| {
-                        Message::SetActionTarget(id.clone(), idx, ActionTarget::ALL[selected])
-                    }
-                }),
-            ));
+            fields = fields.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body("Commands").width(Length::Fixed(112.0)))
+                    .push(
+                        widget::container(widget::dropdown(targets, selected, {
+                            let id = id.clone();
+                            move |selected| {
+                                Message::SetActionTarget(id.clone(), idx, ActionTarget::ALL[selected])
+                            }
+                        }))
+                        .width(Length::Fill)
+                        .align_x(Horizontal::Left),
+                    )
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
+            );
 
             if action.target == ActionTarget::CustomVcp {
                 let draft = self
@@ -1779,9 +1696,15 @@ impl AppModel {
                     code = code.push(widget::text::caption(error));
                 }
                 fields = fields.push(
-                    cosmic::widget::settings::section()
-                        .title("VCP code")
-                        .add(code),
+                    widget::row::with_capacity(2)
+                        .push(widget::text::body("VCP code").width(Length::Fixed(112.0)))
+                        .push(
+                            widget::container(code)
+                                .width(Length::Fill)
+                                .align_x(Horizontal::Left),
+                        )
+                        .spacing(space_s)
+                        .align_y(Alignment::Start),
                 );
             }
 
@@ -1869,9 +1792,15 @@ impl AppModel {
             };
             if let Some(control) = value_control {
                 fields = fields.push(
-                    cosmic::widget::settings::section()
-                        .title("Value")
-                        .add(control),
+                    widget::row::with_capacity(2)
+                        .push(widget::text::body("Value").width(Length::Fixed(112.0)))
+                        .push(
+                            widget::container(control)
+                                .width(Length::Fill)
+                                .align_x(Horizontal::Left),
+                        )
+                        .spacing(space_s)
+                        .align_y(Alignment::Center),
                 );
             }
         }
@@ -2271,18 +2200,6 @@ impl AppModel {
             manager.rebuild_action_map(&self.config);
             self.hotkey_action_map = manager.action_map();
         }
-    }
-
-    fn add_quick_hotkey(&mut self, action: HotkeyActionSpec) {
-        let mut hotkey = Hotkey::new_empty();
-        hotkey.actions = vec![action];
-        let id = hotkey.id.clone();
-        self.config.hotkeys.hotkeys.push(hotkey);
-        self.initialize_hotkey_drafts(&id);
-        self.expanded_hotkey = Some(id.clone());
-        self.recording_state = RecordingState::Recording { hotkey_id: id };
-        self.config_dirty = true;
-        self.refresh_hotkey_actions();
     }
 
     fn enqueue_hardware_jobs(
