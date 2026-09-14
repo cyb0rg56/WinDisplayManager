@@ -399,8 +399,13 @@ impl HotkeyConfig {
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Set,
                     target: ActionTarget::InputSource,
+                    all_monitors: false,
                     monitors: vec![b.monitor_id],
                     input_source: b.input_source,
+                    monitor_inputs: vec![MonitorInput {
+                        monitor_id: b.monitor_id,
+                        input_source: b.input_source,
+                    }],
                     ..Default::default()
                 }],
             });
@@ -417,6 +422,7 @@ impl HotkeyConfig {
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Offset,
                     target: ActionTarget::Brightness,
+                    all_monitors: false,
                     monitors: vec![b.monitor_id],
                     value,
                     ..Default::default()
@@ -435,6 +441,7 @@ impl HotkeyConfig {
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Offset,
                     target: ActionTarget::Contrast,
+                    all_monitors: false,
                     monitors: vec![b.monitor_id],
                     value,
                     ..Default::default()
@@ -449,6 +456,7 @@ impl HotkeyConfig {
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Set,
                     target: ActionTarget::PowerMode,
+                    all_monitors: false,
                     monitors: vec![b.monitor_id],
                     power_mode: b.power_mode,
                     ..Default::default()
@@ -661,4 +669,72 @@ pub fn string_to_code(s: &str) -> Option<Code> {
         "Delete" => Code::Delete,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_bindings_migrate_to_explicit_action_targets() {
+        let json = r#"
+                {
+                    "hotkeys": {
+                        "hotkeys": [],
+                        "brightness_step": 7,
+                        "contrast_step": 9,
+                        "input_switch_bindings": [{
+                            "monitor_id": 4,
+                            "input_source": "Hdmi2",
+                            "hotkey": {"ctrl": true, "alt": false, "shift": false, "win": false, "key": "F1"}
+                        }],
+                        "brightness_bindings": [{
+                            "monitor_id": 5,
+                            "direction": "Down",
+                            "hotkey": {"ctrl": true, "alt": false, "shift": false, "win": false, "key": "F2"}
+                        }],
+                        "contrast_bindings": [{
+                            "monitor_id": 6,
+                            "direction": "Up",
+                            "hotkey": {"ctrl": true, "alt": false, "shift": false, "win": false, "key": "F3"}
+                        }],
+                        "power_mode_bindings": [{
+                            "monitor_id": 7,
+                            "power_mode": "Off",
+                            "hotkey": {"ctrl": true, "alt": false, "shift": false, "win": false, "key": "F4"}
+                        }],
+                        "profile_bindings": []
+                    },
+                    "refresh_interval_secs": 0,
+                    "hotkeys_enabled": true,
+                    "turn_off_behavior": "None"
+                }
+                "#;
+
+        let mut config: AppConfig = serde_json::from_str(json).unwrap();
+        config.hotkeys.migrate_legacy();
+
+        assert_eq!(config.hotkeys.hotkeys.len(), 4);
+        let input = &config.hotkeys.hotkeys[0].actions[0];
+        assert!(!input.all_monitors);
+        assert_eq!(input.monitors, vec![4]);
+        assert_eq!(input.monitor_inputs.len(), 1);
+        assert_eq!(input.monitor_inputs[0].monitor_id, 4);
+        assert_eq!(input.monitor_inputs[0].input_source, InputSource::Hdmi2);
+
+        let brightness = &config.hotkeys.hotkeys[1].actions[0];
+        assert!(!brightness.all_monitors);
+        assert_eq!(brightness.monitors, vec![5]);
+        assert_eq!(brightness.value, -7);
+
+        let contrast = &config.hotkeys.hotkeys[2].actions[0];
+        assert!(!contrast.all_monitors);
+        assert_eq!(contrast.monitors, vec![6]);
+        assert_eq!(contrast.value, 9);
+
+        let power = &config.hotkeys.hotkeys[3].actions[0];
+        assert!(!power.all_monitors);
+        assert_eq!(power.monitors, vec![7]);
+        assert_eq!(power.power_mode, PowerMode::Off);
+    }
 }
