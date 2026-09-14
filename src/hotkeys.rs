@@ -1,6 +1,6 @@
-use crate::config::{build_hotkey_map, AppConfig, HotkeyActionSpec};
+use crate::config::{AppConfig, HotkeyActionSpec, build_hotkey_map};
 use cosmic::iced::futures::SinkExt;
-use cosmic::iced::{stream, Subscription};
+use cosmic::iced::{Subscription, stream};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
 use std::collections::{HashMap, HashSet};
@@ -87,8 +87,7 @@ impl HotkeyManager {
     /// currently-registered hotkeys so the polling subscription is not
     /// restarted.
     pub fn rebuild_action_map(&mut self, config: &AppConfig) {
-        let registered: HashSet<u32> =
-            self.registered_hotkeys.iter().map(|h| h.id()).collect();
+        let registered: HashSet<u32> = self.registered_hotkeys.iter().map(|h| h.id()).collect();
         let hk_map = build_hotkey_map(&config.hotkeys);
         let mut action_map = HashMap::new();
         for (id, (_hotkey, actions)) in &hk_map {
@@ -117,35 +116,33 @@ impl HotkeyManager {
 /// Identity/data wrapper for the hotkey subscription. Hashing the set of
 /// registered hotkey ids ensures the subscription restarts when the bindings
 /// change.
-struct HotkeyData(Arc<HashMap<u32, Vec<HotkeyActionSpec>>>);
+struct HotkeyData(Vec<u32>);
 
 impl Hash for HotkeyData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut ids: Vec<u32> = self.0.keys().copied().collect();
-        ids.sort_unstable();
-        ids.hash(state);
+        self.0.hash(state);
     }
 }
 
 /// Create an iced `Subscription` that polls global hotkey events.
 ///
-/// The subscription emits the triggered hotkey's action chain whenever a
-/// registered hotkey is pressed. The caller is responsible for mapping these
-/// into the application's `Message` type.
-pub fn hotkey_subscription(
-    action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
-) -> Subscription<Vec<HotkeyActionSpec>> {
-    Subscription::run_with(HotkeyData(action_map), |data| {
-        let map = Arc::clone(&data.0);
+/// The subscription emits the triggered hotkey's OS id whenever a registered
+/// hotkey is pressed. The caller resolves the current action chain by id.
+pub fn hotkey_subscription(mut registered_ids: Vec<u32>) -> Subscription<u32> {
+    registered_ids.sort_unstable();
+    registered_ids.dedup();
+
+    Subscription::run_with(HotkeyData(registered_ids), |data| {
+        let registered_ids = data.0.clone();
         stream::channel(
             16,
-            move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<Vec<HotkeyActionSpec>>| async move {
+            move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<u32>| async move {
                 let receiver = GlobalHotKeyEvent::receiver();
                 loop {
                     // Drain all pending events
                     while let Ok(event) = receiver.try_recv() {
-                        if let Some(actions) = map.get(&event.id()) {
-                            let _ = emitter.send(actions.clone()).await;
+                        if registered_ids.binary_search(&event.id()).is_ok() {
+                            let _ = emitter.send(event.id()).await;
                         }
                     }
                     // Poll at 100ms intervals to reduce overhead while maintaining responsiveness
@@ -155,4 +152,3 @@ pub fn hotkey_subscription(
         )
     })
 }
-

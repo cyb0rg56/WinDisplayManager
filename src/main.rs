@@ -1,11 +1,9 @@
 #![windows_subsystem = "windows"]
 
 mod app;
-mod ccd;
 mod config;
 mod ddc;
 mod hotkeys;
-mod profiles;
 mod tray;
 
 fn main() -> cosmic::iced::Result {
@@ -23,7 +21,8 @@ fn main() -> cosmic::iced::Result {
         .antialiasing(false)
         // Don't exit when the window is closed — keep running in the tray
         .exit_on_close(false)
-        .size(cosmic::iced::Size::new(1280.0, 720.0))
+        // Allow the app to run without a main window (tray-only mode)
+        .no_main_window(true)
         .size_limits(
             cosmic::iced::Limits::NONE
                 .min_width(600.0)

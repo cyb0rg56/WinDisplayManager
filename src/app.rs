@@ -1,11 +1,9 @@
 use crate::config::{
-    ActionTarget, ActionType, AppConfig, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
-    TurnOffBehavior,
+    AppConfig, HotkeyAction, HotkeyBinding, BrightnessBinding, ContrastBinding,
+    InputSwitchBinding, StepDirection,
 };
-use crate::ccd;
-use crate::ddc::{self, InputSource, MonitorInfo, MonitorState, PowerMode};
+use crate::ddc::{self, InputSource, MonitorInfo, MonitorState};
 use crate::hotkeys::{self, HotkeyManager};
-use crate::profiles;
 use crate::tray::{SystemTray, TrayMessage, TrayStream};
 use cosmic::app::Application;
 use cosmic::iced::alignment::Horizontal;
@@ -23,7 +21,13 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 // Simple inline SVG icon (monitor symbol)
-const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="131.1 120.55 261.65 226.85">  <!-- Monitor -->  <path d="M 365.047 120.547 L 158.791 120.547 C 143.497 120.554 131.102 132.953 131.101 148.247 L 131.101 276.344 C 131.102 291.636 143.498 304.033 158.791 304.034 L 229.066 304.034 L 229.066 326.233 L 197.294 326.233 C 189.148 326.233 184.056 335.051 188.129 342.106 C 190.02 345.38 193.513 347.397 197.294 347.397 L 326.547 347.397 C 334.693 347.397 339.784 338.579 335.711 331.524 C 333.821 328.25 330.327 326.233 326.547 326.233 L 294.771 326.233 L 294.771 304.035 L 365.046 304.035 C 380.342 304.038 392.744 291.64 392.746 276.344 L 392.746 148.242 C 392.742 132.946 380.342 120.548 365.046 120.547 L 365.047 120.547 Z M 368.507 276.34 C 368.502 278.25 366.956 279.797 365.047 279.804 L 158.791 279.804 C 156.881 279.798 155.336 278.249 155.336 276.34 L 155.336 148.242 C 155.337 146.334 156.883 144.789 158.791 144.788 L 365.047 144.788 C 366.954 144.79 368.501 146.334 368.507 148.242 L 368.507 276.34 Z" data-name="Monitor" style=""></path>    <!-- Centered Lightning Bolt -->  <path transform="translate(5, -10)" d="M 271 190 L 248.371 190 L 236.157 224.479 C 236.124 224.577 236.197 224.676 236.306 224.681 L 250.319 224.681 C 250.433 224.676 250.517 224.78 250.484 224.882 L 239.64 255.276 C 239.438 255.842 239.967 256.398 240.589 256.277 C 240.792 256.238 240.97 256.13 241.092 255.972 L 273.806 213.863 C 273.882 213.769 273.82 213.631 273.692 213.617 C 273.688 213.617 273.681 213.616 273.674 213.616 L 258.968 213.616 C 258.847 213.603 258.775 213.489 258.819 213.384 L 271.149 190.17 C 271.157 190.085 271.091 190.009 271 190 Z" style="fill: rgb(255, 221, 0);"></path></svg>"#;
+const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 320 280">
+  <!-- Monitor -->
+  <path d="M 365.047 120.547 L 158.791 120.547 C 143.497 120.554 131.102 132.953 131.101 148.247 L 131.101 276.344 C 131.102 291.636 143.498 304.033 158.791 304.034 L 229.066 304.034 L 229.066 326.233 L 197.294 326.233 C 189.148 326.233 184.056 335.051 188.129 342.106 C 190.02 345.38 193.513 347.397 197.294 347.397 L 326.547 347.397 C 334.693 347.397 339.784 338.579 335.711 331.524 C 333.821 328.25 330.327 326.233 326.547 326.233 L 294.771 326.233 L 294.771 304.035 L 365.046 304.035 C 380.342 304.038 392.744 291.64 392.746 276.344 L 392.746 148.242 C 392.742 132.946 380.342 120.548 365.046 120.547 L 365.047 120.547 Z M 368.507 276.34 C 368.502 278.25 366.956 279.797 365.047 279.804 L 158.791 279.804 C 156.881 279.798 155.336 278.249 155.336 276.34 L 155.336 148.242 C 155.337 146.334 156.883 144.789 158.791 144.788 L 365.047 144.788 C 366.954 144.79 368.501 146.334 368.507 148.242 L 368.507 276.34 Z" data-name="Monitor" style=""></path>
+  
+  <!-- Centered Lightning Bolt -->
+  <path transform="translate(5, -10)" d="M 271 190 L 248.371 190 L 236.157 224.479 C 236.124 224.577 236.197 224.676 236.306 224.681 L 250.319 224.681 C 250.433 224.676 250.517 224.78 250.484 224.882 L 239.64 255.276 C 239.438 255.842 239.967 256.398 240.589 256.277 C 240.792 256.238 240.97 256.13 241.092 255.972 L 273.806 213.863 C 273.882 213.769 273.82 213.631 273.692 213.617 C 273.688 213.617 273.681 213.616 273.674 213.616 L 258.968 213.616 C 258.847 213.603 258.775 213.489 258.819 213.384 L 271.149 190.17 C 271.157 190.085 271.091 190.009 271 190 Z" style="fill: rgb(255, 221, 0);"></path>
+</svg>"#;
 
 // ---------------------------------------------------------------------------
 // Navigation pages
@@ -33,9 +37,7 @@ const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="131
 pub enum Page {
     Monitor(u32), // 1-indexed monitor ID
     Hotkeys,
-    Profiles,
     Settings,
-    About,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,58 +56,36 @@ pub enum Message {
     BrightnessApplied(u32, u16),
     ContrastApplied(u32, u16),
     InputSourceApplied(u32, InputSource),
-    PowerModeApplied(u32, PowerMode),
-    CustomVcpApplied(u32, u8, u16),
     // Debounced slider changes
     BrightnessSliderChanged(u32, u16),
     ContrastSliderChanged(u32, u16),
     ApplyBrightnessDebounced(u32, u16),
     ApplyContrastDebounced(u32, u16),
-    // Hotkeys (action-chain model)
-    HotkeyTriggered(Vec<HotkeyActionSpec>),
+    // Hotkeys
+    HotkeyTriggered(HotkeyAction),
     ToggleHotkeys(bool),
-    AddHotkey,
-    DeleteHotkey(String),
-    StartRecording(String),
+    // Settings page - New binding workflow
+    StartRecordingBrightness(u32, StepDirection),
+    StartRecordingContrast(u32, StepDirection),
+    StartRecordingInputSwitch(u32, InputSource),
     CancelRecording,
-    ClearBinding(String),
     KeyPressed(Modifiers, Key),
-    AddAction(String),
-    DeleteAction(String, usize),
-    SetActionType(String, usize, ActionType),
-    SetActionTarget(String, usize, ActionTarget),
-    SetActionValue(String, usize, i32),
-    SetActionVcpCode(String, usize, u8),
-    SetActionInputSource(String, usize, InputSource),
-    /// Set (Some) or clear (None) the input for one monitor in a per-monitor
-    /// Input Source action.
-    SetMonitorInput(String, usize, u32, Option<InputSource>),
-    SetActionPowerMode(String, usize, PowerMode),
-    SetActionProfile(String, usize, String),
-    ToggleActionAllMonitors(String, usize, bool),
-    ToggleActionMonitor(String, usize, u32, bool),
-    SetTurnOffBehavior(TurnOffBehavior),
+    // Hotkey management
+    RemoveHotkeyBinding(usize, BindingCategory),
     SaveConfig,
-    // Profiles
-    RefreshProfiles,
-    ProfilesListed(Vec<String>),
-    ProfileNameInput(String),
-    SaveCurrentProfile(String),
-    ApplyProfile(String),
-    DeleteProfile(String),
-    ProfileApplied(String),
-    AddProfileHotkey(String),
-    MonitorsPoweredOff,
     // System tray
     Tray(TrayMessage),
     /// Hide window (close-to-tray)
     HideWindow,
-    /// A window surface was closed (used to reset the tracked main window)
-    WindowClosed(window::Id),
-    /// Open a URL from the About page in the default browser
-    OpenUrl(String),
     // Errors
     Error(String),
+}
+
+#[derive(Clone, Debug)]
+pub enum BindingCategory {
+    InputSwitch,
+    Brightness,
+    Contrast,
 }
 
 // ---------------------------------------------------------------------------
@@ -115,8 +95,27 @@ pub enum Message {
 #[derive(Clone, Debug)]
 pub enum RecordingState {
     NotRecording,
-    Recording {
-        hotkey_id: String,
+    RecordingBrightness {
+        monitor_id: u32,
+        direction: StepDirection,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        win: bool,
+        key: String,
+    },
+    RecordingContrast {
+        monitor_id: u32,
+        direction: StepDirection,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        win: bool,
+        key: String,
+    },
+    RecordingInputSwitch {
+        monitor_id: u32,
+        input_source: InputSource,
         ctrl: bool,
         alt: bool,
         shift: bool,
@@ -124,7 +123,6 @@ pub enum RecordingState {
         key: String,
     },
 }
-
 
 // ---------------------------------------------------------------------------
 // Application model
@@ -136,19 +134,13 @@ pub struct AppModel {
     monitors: Vec<MonitorState>,
     config: AppConfig,
     hotkey_manager: Option<HotkeyManager>,
-    hotkey_action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
-    // Per-hotkey (by `Hotkey::id`) OS registration status, for the active/inactive indicator.
-    hotkey_status: HashMap<String, bool>,
+    hotkey_action_map: Arc<HashMap<u32, HotkeyAction>>,
     status_message: String,
     recording_state: RecordingState,
     about: widget::about::About,
     // Debounce state for sliders
     pending_brightness: Option<(u32, u16)>,
     pending_contrast: Option<(u32, u16)>,
-    // Saved monitor-layout profiles (file stems)
-    profiles: Vec<String>,
-    // Text input for naming a new profile
-    profile_name_input: String,
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
 }
@@ -172,18 +164,6 @@ fn input_source_index(source: &InputSource) -> Option<usize> {
     INPUT_SOURCES.iter().position(|s| s == source)
 }
 
-// List of power modes shown in the hotkey action dropdown
-const POWER_MODES: &[PowerMode] = &[
-    PowerMode::On,
-    PowerMode::Standby,
-    PowerMode::Suspend,
-    PowerMode::Off,
-];
-
-fn power_mode_index(mode: &PowerMode) -> Option<usize> {
-    POWER_MODES.iter().position(|m| m == mode)
-}
-
 /// Convert an Iced Key to our internal string format
 fn key_to_string(key: &Key) -> String {
     match key {
@@ -202,18 +182,6 @@ fn key_to_string(key: &Key) -> String {
                 Named::F10 => "F10",
                 Named::F11 => "F11",
                 Named::F12 => "F12",
-                Named::F13 => "F13",
-                Named::F14 => "F14",
-                Named::F15 => "F15",
-                Named::F16 => "F16",
-                Named::F17 => "F17",
-                Named::F18 => "F18",
-                Named::F19 => "F19",
-                Named::F20 => "F20",
-                Named::F21 => "F21",
-                Named::F22 => "F22",
-                Named::F23 => "F23",
-                Named::F24 => "F24",
                 Named::ArrowUp => "ArrowUp",
                 Named::ArrowDown => "ArrowDown",
                 Named::ArrowLeft => "ArrowLeft",
@@ -224,6 +192,7 @@ fn key_to_string(key: &Key) -> String {
                 Named::PageDown => "PageDown",
                 Named::Insert => "Insert",
                 Named::Delete => "Delete",
+                Named::Space => "Space",
                 Named::Enter => "Enter",
                 Named::Escape => "Escape",
                 Named::Backspace => "Backspace",
@@ -233,9 +202,7 @@ fn key_to_string(key: &Key) -> String {
         }
         Key::Character(c) => {
             let ch = c.chars().next().unwrap_or('?');
-            if ch == ' ' {
-                "Space".to_string()
-            } else if ch.is_ascii_alphabetic() {
+            if ch.is_ascii_alphabetic() {
                 format!("Key{}", ch.to_uppercase())
             } else if ch.is_ascii_digit() {
                 format!("Digit{}", ch)
@@ -244,49 +211,6 @@ fn key_to_string(key: &Key) -> String {
             }
         }
         Key::Unidentified => String::new(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::key_to_string;
-    use crate::config::HotkeyBinding;
-    use cosmic::iced::keyboard::{key::Named, Key};
-    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
-
-    #[test]
-    fn extended_function_keys_convert_to_hotkeys() {
-        for (named, key, code) in [
-            (Named::F13, "F13", Code::F13),
-            (Named::F14, "F14", Code::F14),
-            (Named::F15, "F15", Code::F15),
-            (Named::F16, "F16", Code::F16),
-            (Named::F17, "F17", Code::F17),
-            (Named::F18, "F18", Code::F18),
-            (Named::F19, "F19", Code::F19),
-            (Named::F20, "F20", Code::F20),
-            (Named::F21, "F21", Code::F21),
-            (Named::F22, "F22", Code::F22),
-            (Named::F23, "F23", Code::F23),
-            (Named::F24, "F24", Code::F24),
-        ] {
-            let recorded_key = key_to_string(&Key::Named(named));
-            assert_eq!(recorded_key, key);
-
-            for with_modifiers in [false, true] {
-                let binding = HotkeyBinding {
-                    ctrl: with_modifiers,
-                    alt: with_modifiers,
-                    shift: with_modifiers,
-                    win: with_modifiers,
-                    key: recorded_key.clone(),
-                };
-                let modifiers = with_modifiers.then_some(
-                    Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT | Modifiers::SUPER,
-                );
-                assert_eq!(binding.to_hotkey(), Some(HotKey::new(modifiers, code)));
-            }
-        }
     }
 }
 
@@ -332,10 +256,6 @@ impl cosmic::Application for AppModel {
             .as_ref()
             .map(|m| m.action_map())
             .unwrap_or_else(|| Arc::new(HashMap::new()));
-        let hotkey_status = hotkey_manager
-            .as_ref()
-            .map(|m| m.status())
-            .unwrap_or_default();
 
         // Build nav model with a placeholder; will be rebuilt after detection
         let mut nav = nav_bar::Model::default();
@@ -347,8 +267,7 @@ impl cosmic::Application for AppModel {
         let about = widget::about::About::default()
             .name("Windows Display Manager")
             .icon(widget::icon::from_svg_bytes(APP_ICON))
-            .version(env!("CARGO_PKG_VERSION"))
-            .comments("DDC/CI monitor control with global hotkeys.");
+            .version(env!("CARGO_PKG_VERSION"));
 
         // Set up system tray
         let tray = match SystemTray::new() {
@@ -369,22 +288,16 @@ impl cosmic::Application for AppModel {
             config,
             hotkey_manager,
             hotkey_action_map,
-            hotkey_status,
             status_message: "Starting...".into(),
             recording_state: RecordingState::NotRecording,
             about,
             pending_brightness: None,
             pending_contrast: None,
-            profiles: Vec::new(),
-            profile_name_input: String::new(),
             tray,
         };
 
-        // Fire initial monitor detection and profile listing
-        let cmd = cosmic::app::Task::batch([
-            app.update(Message::RefreshMonitors),
-            app.update(Message::RefreshProfiles),
-        ]);
+        // Fire initial monitor detection
+        let cmd = app.update(Message::RefreshMonitors);
         (app, cmd)
     }
 
@@ -450,22 +363,13 @@ impl cosmic::Application for AppModel {
         // System tray subscription
         if let Some((_, ref tray_stream)) = self.tray {
             subs.push(
-                tray_stream.clone().subscription().map(Message::Tray),
+                Subscription::run_with_id(
+                    "system-tray",
+                    tray_stream.clone().into_subscription_stream(),
+                )
+                .map(Message::Tray),
             );
         }
-
-        // Track window close so the tray can reopen a fresh window later.
-        // The tracked main window id must only be cleared after the surface is
-        // actually gone (see the WindowClosed handler in `update`).
-        subs.push(
-            event::listen_with(|event, _status, id| {
-                if let Event::Window(window::Event::Closed) = event {
-                    Some(Message::WindowClosed(id))
-                } else {
-                    None
-                }
-            })
-        );
 
         Subscription::batch(subs)
     }
@@ -508,21 +412,11 @@ impl cosmic::Application for AppModel {
                     .insert()
                     .text("Hotkeys")
                     .data::<Page>(Page::Hotkeys);
-                // Profiles page
-                self.nav
-                    .insert()
-                    .text("Profiles")
-                    .data::<Page>(Page::Profiles);
                 // Settings page
                 self.nav
                     .insert()
                     .text("Settings")
                     .data::<Page>(Page::Settings);
-                // About page
-                self.nav
-                    .insert()
-                    .text("About")
-                    .data::<Page>(Page::About);
 
                 // Activate first monitor
                 self.nav.activate_position(0);
@@ -698,13 +592,214 @@ impl cosmic::Application for AppModel {
 
             Message::InputSourceApplied(_monitor_id, _source) => {}
 
-            Message::PowerModeApplied(_monitor_id, _power_mode) => {}
-
-            Message::CustomVcpApplied(_monitor_id, _code, _value) => {}
-
             // -- Hotkey actions ---------------------------------------------
-            Message::HotkeyTriggered(actions) => {
-                return self.handle_hotkey_action(actions);
+            Message::HotkeyTriggered(action) => {
+                return self.handle_hotkey_action(action);
+            }
+
+            // -- Settings: hotkey recording workflow ------------------------
+            Message::StartRecordingBrightness(monitor_id, direction) => {
+                self.recording_state = RecordingState::RecordingBrightness {
+                    monitor_id,
+                    direction,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    win: false,
+                    key: String::new(),
+                };
+                self.status_message = "Recording hotkey... Press modifiers and key".into();
+            }
+
+            Message::StartRecordingContrast(monitor_id, direction) => {
+                self.recording_state = RecordingState::RecordingContrast {
+                    monitor_id,
+                    direction,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    win: false,
+                    key: String::new(),
+                };
+                self.status_message = "Recording hotkey... Press modifiers and key".into();
+            }
+
+            Message::StartRecordingInputSwitch(monitor_id, input_source) => {
+                self.recording_state = RecordingState::RecordingInputSwitch {
+                    monitor_id,
+                    input_source,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    win: false,
+                    key: String::new(),
+                };
+                self.status_message = "Recording hotkey... Press modifiers and key".into();
+            }
+
+            Message::CancelRecording => {
+                self.recording_state = RecordingState::NotRecording;
+                self.status_message = "Hotkey recording cancelled".into();
+            }
+
+            Message::KeyPressed(modifiers, key) => {
+                // Convert the key to our internal format
+                let key_string = key_to_string(&key);
+                
+                if key_string.is_empty() {
+                    return cosmic::app::Task::none();
+                }
+
+                let ctrl = modifiers.control();
+                let alt = modifiers.alt();
+                let shift = modifiers.shift();
+                let win = modifiers.logo();
+
+                // Auto-save the hotkey
+                match &self.recording_state {
+                    RecordingState::RecordingBrightness { monitor_id, direction, .. } => {
+                        self.config.hotkeys.brightness_bindings.push(BrightnessBinding {
+                            monitor_id: *monitor_id,
+                            direction: *direction,
+                            hotkey: HotkeyBinding {
+                                ctrl,
+                                alt,
+                                shift,
+                                win,
+                                key: key_string.clone(),
+                            },
+                        });
+                        self.status_message = format!("Brightness hotkey added: {}. Remember to save configuration.", 
+                            format_hotkey(ctrl, alt, shift, win, &key_string));
+                        self.recording_state = RecordingState::NotRecording;
+                        
+                        // Re-register hotkeys immediately
+                        if let Some(ref mut manager) = self.hotkey_manager {
+                            manager.update(&self.config);
+                            self.hotkey_action_map = manager.action_map();
+                        } else {
+                            self.hotkey_manager = HotkeyManager::new(&self.config);
+                            self.hotkey_action_map = self
+                                .hotkey_manager
+                                .as_ref()
+                                .map(|m| m.action_map())
+                                .unwrap_or_else(|| Arc::new(HashMap::new()));
+                        }
+                    }
+                    RecordingState::RecordingContrast { monitor_id, direction, .. } => {
+                        self.config.hotkeys.contrast_bindings.push(ContrastBinding {
+                            monitor_id: *monitor_id,
+                            direction: *direction,
+                            hotkey: HotkeyBinding {
+                                ctrl,
+                                alt,
+                                shift,
+                                win,
+                                key: key_string.clone(),
+                            },
+                        });
+                        self.status_message = format!("Contrast hotkey added: {}. Remember to save configuration.", 
+                            format_hotkey(ctrl, alt, shift, win, &key_string));
+                        self.recording_state = RecordingState::NotRecording;
+                        
+                        // Re-register hotkeys immediately
+                        if let Some(ref mut manager) = self.hotkey_manager {
+                            manager.update(&self.config);
+                            self.hotkey_action_map = manager.action_map();
+                        } else {
+                            self.hotkey_manager = HotkeyManager::new(&self.config);
+                            self.hotkey_action_map = self
+                                .hotkey_manager
+                                .as_ref()
+                                .map(|m| m.action_map())
+                                .unwrap_or_else(|| Arc::new(HashMap::new()));
+                        }
+                    }
+                    RecordingState::RecordingInputSwitch { monitor_id, input_source, .. } => {
+                        self.config.hotkeys.input_switch_bindings.push(InputSwitchBinding {
+                            monitor_id: *monitor_id,
+                            input_source: *input_source,
+                            hotkey: HotkeyBinding {
+                                ctrl,
+                                alt,
+                                shift,
+                                win,
+                                key: key_string.clone(),
+                            },
+                        });
+                        self.status_message = format!("Input switch hotkey added: {}. Remember to save configuration.", 
+                            format_hotkey(ctrl, alt, shift, win, &key_string));
+                        self.recording_state = RecordingState::NotRecording;
+                        
+                        // Re-register hotkeys immediately
+                        if let Some(ref mut manager) = self.hotkey_manager {
+                            manager.update(&self.config);
+                            self.hotkey_action_map = manager.action_map();
+                        } else {
+                            self.hotkey_manager = HotkeyManager::new(&self.config);
+                            self.hotkey_action_map = self
+                                .hotkey_manager
+                                .as_ref()
+                                .map(|m| m.action_map())
+                                .unwrap_or_else(|| Arc::new(HashMap::new()));
+                        }
+                    }
+                    RecordingState::NotRecording => {}
+                }
+            }
+
+            Message::RemoveHotkeyBinding(idx, category) => {
+                match category {
+                    BindingCategory::InputSwitch => {
+                        if idx < self.config.hotkeys.input_switch_bindings.len() {
+                            self.config.hotkeys.input_switch_bindings.remove(idx);
+                        }
+                    }
+                    BindingCategory::Brightness => {
+                        if idx < self.config.hotkeys.brightness_bindings.len() {
+                            self.config.hotkeys.brightness_bindings.remove(idx);
+                        }
+                    }
+                    BindingCategory::Contrast => {
+                        if idx < self.config.hotkeys.contrast_bindings.len() {
+                            self.config.hotkeys.contrast_bindings.remove(idx);
+                        }
+                    }
+                }
+                
+                // Re-register hotkeys after removal
+                if let Some(ref mut manager) = self.hotkey_manager {
+                    manager.update(&self.config);
+                    self.hotkey_action_map = manager.action_map();
+                } else {
+                    self.hotkey_manager = HotkeyManager::new(&self.config);
+                    self.hotkey_action_map = self
+                        .hotkey_manager
+                        .as_ref()
+                        .map(|m| m.action_map())
+                        .unwrap_or_else(|| Arc::new(HashMap::new()));
+                }
+            }
+
+            Message::SaveConfig => {
+                // Save and re-register hotkeys
+                if let Err(e) = self.config.save() {
+                    self.status_message = format!("Failed to save config: {e}");
+                } else {
+                    self.status_message = "Configuration saved and hotkeys activated.".into();
+                    // Re-register hotkeys
+                    if let Some(ref mut manager) = self.hotkey_manager {
+                        manager.update(&self.config);
+                        self.hotkey_action_map = manager.action_map();
+                    } else {
+                        self.hotkey_manager = HotkeyManager::new(&self.config);
+                        self.hotkey_action_map = self
+                            .hotkey_manager
+                            .as_ref()
+                            .map(|m| m.action_map())
+                            .unwrap_or_else(|| Arc::new(HashMap::new()));
+                    }
+                }
             }
 
             Message::ToggleHotkeys(enabled) => {
@@ -720,330 +815,11 @@ impl cosmic::Application for AppModel {
                 }
             }
 
-            Message::AddHotkey => {
-                let hotkey = Hotkey::new_empty();
-                let id = hotkey.id.clone();
-                self.config.hotkeys.hotkeys.push(hotkey);
-                self.recording_state = RecordingState::Recording {
-                    hotkey_id: id,
-                    ctrl: false,
-                    alt: false,
-                    shift: false,
-                    win: false,
-                    key: String::new(),
-                };
-                self.status_message =
-                    "New hotkey added. Press a key combination to bind it.".into();
-            }
-
-            Message::DeleteHotkey(id) => {
-                self.config.hotkeys.hotkeys.retain(|h| h.id != id);
-                if matches!(&self.recording_state, RecordingState::Recording { hotkey_id, .. } if hotkey_id == &id)
-                {
-                    self.recording_state = RecordingState::NotRecording;
-                }
-                self.refresh_hotkey_registration();
-            }
-
-            Message::StartRecording(hotkey_id) => {
-                self.recording_state = RecordingState::Recording {
-                    hotkey_id,
-                    ctrl: false,
-                    alt: false,
-                    shift: false,
-                    win: false,
-                    key: String::new(),
-                };
-                self.status_message = "Recording hotkey... Press modifiers and key".into();
-            }
-
-            Message::CancelRecording => {
-                self.recording_state = RecordingState::NotRecording;
-                self.status_message = "Hotkey recording cancelled".into();
-            }
-
-            Message::ClearBinding(id) => {
-                if let Some(hk) = self.hotkey_mut(&id) {
-                    hk.binding = HotkeyBinding::unbound();
-                }
-                self.refresh_hotkey_registration();
-                self.status_message = "Hotkey binding cleared.".into();
-            }
-
-            Message::KeyPressed(modifiers, key) => {
-                // Convert the key to our internal format
-                let key_string = key_to_string(&key);
-
-                if key_string.is_empty() {
-                    return cosmic::app::Task::none();
-                }
-
-                let ctrl = modifiers.control();
-                let alt = modifiers.alt();
-                let shift = modifiers.shift();
-                let win = modifiers.logo();
-
-                if let RecordingState::Recording { hotkey_id, .. } = &self.recording_state {
-                    let hotkey_id = hotkey_id.clone();
-                    if let Some(hk) = self.hotkey_mut(&hotkey_id) {
-                        hk.binding = HotkeyBinding {
-                            ctrl,
-                            alt,
-                            shift,
-                            win,
-                            key: key_string.clone(),
-                        };
-                    }
-                    self.status_message = format!(
-                        "Hotkey bound to {}. Remember to save configuration.",
-                        format_hotkey(ctrl, alt, shift, win, &key_string)
-                    );
-                    self.recording_state = RecordingState::NotRecording;
-                    self.refresh_hotkey_registration();
-                }
-            }
-
-            Message::AddAction(id) => {
-                if let Some(hk) = self.hotkey_mut(&id) {
-                    hk.actions.push(HotkeyActionSpec::default());
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::DeleteAction(id, idx) => {
-                if let Some(hk) = self.hotkey_mut(&id) {
-                    if idx < hk.actions.len() {
-                        hk.actions.remove(idx);
-                    }
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionType(id, idx, action_type) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.action_type = action_type;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionTarget(id, idx, target) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.target = target;
-                    if !target.supports_offset() && a.action_type == ActionType::Offset {
-                        a.action_type = ActionType::Set;
-                    }
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionValue(id, idx, value) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.value = value;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionVcpCode(id, idx, code) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.vcp_code = code;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionInputSource(id, idx, source) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.input_source = source;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetMonitorInput(id, idx, monitor_id, source) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    match source {
-                        Some(src) => {
-                            if let Some(mi) = a
-                                .monitor_inputs
-                                .iter_mut()
-                                .find(|mi| mi.monitor_id == monitor_id)
-                            {
-                                mi.input_source = src;
-                            } else {
-                                a.monitor_inputs.push(MonitorInput {
-                                    monitor_id,
-                                    input_source: src,
-                                });
-                            }
-                        }
-                        None => a.monitor_inputs.retain(|mi| mi.monitor_id != monitor_id),
-                    }
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionPowerMode(id, idx, mode) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.power_mode = mode;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetActionProfile(id, idx, name) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.profile_name = name;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::ToggleActionAllMonitors(id, idx, all) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    a.all_monitors = all;
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::ToggleActionMonitor(id, idx, monitor_id, checked) => {
-                if let Some(a) = self.action_mut(&id, idx) {
-                    if checked {
-                        if !a.monitors.contains(&monitor_id) {
-                            a.monitors.push(monitor_id);
-                        }
-                    } else {
-                        a.monitors.retain(|m| *m != monitor_id);
-                    }
-                }
-                self.refresh_hotkey_actions();
-            }
-
-            Message::SetTurnOffBehavior(behavior) => {
-                self.config.turn_off_behavior = behavior;
-            }
-
-            Message::SaveConfig => {
-                // Save and re-register hotkeys
-                if let Err(e) = self.config.save() {
-                    self.status_message = format!("Failed to save config: {e}");
-                } else {
-                    self.status_message = "Configuration saved and hotkeys activated.".into();
-                    self.refresh_hotkey_registration();
-                }
-            }
-
-            // -- Profiles ---------------------------------------------------
-            Message::RefreshProfiles => {
-                return cosmic::app::Task::perform(
-                    async { tokio::task::spawn_blocking(profiles::list_profiles).await },
-                    |result| match result {
-                        Ok(list) => cosmic::Action::App(Message::ProfilesListed(list)),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                    },
-                );
-            }
-
-            Message::ProfilesListed(list) => {
-                self.profiles = list;
-                // Keep the tray menu in sync with the profile list.
-                if let Some((ref tray, _)) = self.tray {
-                    tray.update_menu(&self.profiles);
-                }
-            }
-
-            Message::ProfileNameInput(text) => {
-                self.profile_name_input = text;
-            }
-
-            Message::SaveCurrentProfile(name) => {
-                let name = name.trim().to_string();
-                if name.is_empty() {
-                    self.status_message = "Enter a profile name first.".into();
-                    return cosmic::app::Task::none();
-                }
-                self.profile_name_input.clear();
-                self.status_message = format!("Saving profile '{name}'...");
-                return cosmic::app::Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || profiles::save_current(&name)).await
-                    },
-                    |result| match result {
-                        Ok(Ok(())) => cosmic::Action::App(Message::RefreshProfiles),
-                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Save profile error: {e}"))),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                    },
-                );
-            }
-
-            Message::ApplyProfile(name) => {
-                self.status_message = format!("Applying profile '{name}'...");
-                let for_task = name.clone();
-                return cosmic::app::Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || profiles::apply_profile(&for_task)).await
-                    },
-                    move |result| match result {
-                        Ok(Ok(())) => cosmic::Action::App(Message::ProfileApplied(name.clone())),
-                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Apply profile error: {e}"))),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                    },
-                );
-            }
-
-            Message::ProfileApplied(name) => {
-                self.status_message = format!("Applied profile '{name}'.");
-                // Topology changed: re-detect monitors.
-                return self.update(Message::RefreshMonitors);
-            }
-
-            Message::DeleteProfile(name) => {
-                return cosmic::app::Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || profiles::delete_profile(&name)).await
-                    },
-                    |result| match result {
-                        Ok(Ok(())) => cosmic::Action::App(Message::RefreshProfiles),
-                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Delete profile error: {e}"))),
-                        Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                    },
-                );
-            }
-
-            Message::AddProfileHotkey(profile_name) => {
-                let hotkey = Hotkey::new_for_profile(profile_name);
-                let id = hotkey.id.clone();
-                self.config.hotkeys.hotkeys.push(hotkey);
-                if let Some(pos) = self.nav_position_of(Page::Hotkeys) {
-                    self.nav.activate_position(pos);
-                }
-                self.recording_state = RecordingState::Recording {
-                    hotkey_id: id,
-                    ctrl: false,
-                    alt: false,
-                    shift: false,
-                    win: false,
-                    key: String::new(),
-                };
-                self.status_message =
-                    "New profile hotkey added on the Hotkeys page. Press a key combination to bind it."
-                        .into();
-            }
-
-            Message::MonitorsPoweredOff => {
-                self.status_message = "Monitors turned off.".into();
-            }
-
             // -- Hide window (close-to-tray) --------------------------------
             Message::HideWindow => {
                 log::info!("Hiding window to tray");
                 if let Some(id) = self.core.main_window_id() {
                     return window::close(id);
-                }
-            }
-
-            // -- Window surface closed --------------------------------------
-            // Reset the tracked main window once its surface is gone so the
-            // tray can open a fresh window on the next `ShowWindow`.
-            Message::WindowClosed(id) => {
-                if self.core.main_window_id() == Some(id) {
-                    log::info!("Main window closed; clearing tracked window id");
-                    self.core_mut().set_main_window_id(None);
                 }
             }
 
@@ -1056,13 +832,9 @@ impl cosmic::Application for AppModel {
                             // Window still exists — try to focus it
                             return window::gain_focus(id);
                         } else {
-                            // Window was closed — open a new one.
-                            // `decorations: false` lets COSMIC draw its own header
-                            // bar (client-side decorations) without the native
-                            // Windows title bar appearing as well.
+                            // Window was closed — open a new one
                             let (new_id, open_task) = window::open(window::Settings {
                                 min_size: Some(cosmic::iced::Size::new(600.0, 400.0)),
-                                decorations: false,
                                 ..window::Settings::default()
                             });
                             self.core_mut().set_main_window_id(Some(new_id));
@@ -1070,41 +842,10 @@ impl cosmic::Application for AppModel {
                             return cosmic::app::Task::batch([open_task.discard(), title_task]);
                         }
                     }
-                    TrayMessage::LoadProfile(name) => {
-                        log::info!("Tray: load profile '{name}'");
-                        return self.update(Message::ApplyProfile(name));
-                    }
-                    TrayMessage::SaveCurrentProfile => {
-                        log::info!("Tray: save current profile requested");
-                        // Show the window on the Profiles page so the user can name it.
-                        if let Some(pos) = self.nav_position_of(Page::Profiles) {
-                            self.nav.activate_position(pos);
-                        }
-                        return self.update(Message::Tray(TrayMessage::ShowWindow));
-                    }
-                    TrayMessage::TurnOffMonitors => {
-                        log::info!("Tray: turn off monitors");
-                        return cosmic::app::Task::perform(
-                            async { tokio::task::spawn_blocking(ccd::turn_off_monitors).await },
-                            |result| match result {
-                                Ok(()) => cosmic::Action::App(Message::MonitorsPoweredOff),
-                                Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                            },
-                        );
-                    }
                     TrayMessage::Exit => {
                         log::info!("Tray: Exit requested");
                         return cosmic::iced::exit();
                     }
-                }
-            }
-
-            Message::OpenUrl(url) => {
-                if let Err(e) = std::process::Command::new("rundll32.exe")
-                    .args(["url.dll,FileProtocolHandler", &url])
-                    .spawn()
-                {
-                    log::warn!("Failed to open URL {url}: {e}");
                 }
             }
 
@@ -1136,9 +877,7 @@ impl cosmic::Application for AppModel {
         let content: Element<_> = match page {
             Page::Monitor(monitor_id) => self.view_monitor(monitor_id),
             Page::Hotkeys => self.view_hotkeys(),
-            Page::Profiles => self.view_profiles(),
             Page::Settings => self.view_settings(),
-            Page::About => self.view_about(),
         };
 
         // Wrap in a container with status bar at the bottom
@@ -1279,20 +1018,16 @@ impl AppModel {
                         ),
                     );
 
-                widget::container(
-                    widget::column::with_capacity(6)
-                        .push(header)
-                        .push(resolution_label)
-                        .push(input_section)
-                        .push(brightness_section)
-                        .push(contrast_section)
-                        .spacing(space_s)
-                        .width(Length::Fill)
-                        .max_width(700.0),
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+                widget::column::with_capacity(6)
+                    .push(header)
+                    .push(resolution_label)
+                    .push(input_section)
+                    .push(brightness_section)
+                    .push(contrast_section)
+                    .spacing(space_s)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
             }
         }
     }
@@ -1303,358 +1038,192 @@ impl AppModel {
 
         let header = widget::text::title3("Hotkeys");
         let description = widget::text::body(
-            "Configure global hotkeys, each bound to a chain of one or more actions. \
-             Changes take effect immediately; press Save to persist them.",
+            "Configure global hotkeys for monitor control. \
+             Changes take effect immediately after recording.",
         );
 
-        let mut cards =
-            widget::column::with_capacity(self.config.hotkeys.hotkeys.len() + 1).spacing(space_s);
+        // --- Brightness bindings ---
+        let mut brightness_items = widget::column::with_capacity(
+            self.config.hotkeys.brightness_bindings.len() + 1,
+        )
+        .spacing(4);
 
-        if self.config.hotkeys.hotkeys.is_empty() {
-            cards = cards.push(widget::text::body("No hotkeys configured yet."));
+        for (i, binding) in self.config.hotkeys.brightness_bindings.iter().enumerate() {
+            let dir = match binding.direction {
+                StepDirection::Up => "Up",
+                StepDirection::Down => "Down",
+            };
+            let label = format!(
+                "Monitor {} Brightness {} : {}",
+                binding.monitor_id, dir, binding.hotkey
+            );
+            brightness_items = brightness_items.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body(label).width(Length::Fill))
+                    .push(
+                        widget::button::destructive("Remove")
+                            .on_press(Message::RemoveHotkeyBinding(
+                                i,
+                                BindingCategory::Brightness,
+                            )),
+                    )
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+            );
         }
 
-        for hotkey in &self.config.hotkeys.hotkeys {
-            cards = cards.push(self.view_hotkey_card(hotkey, space_s));
+        let brightness_section = cosmic::widget::settings::section()
+            .title("Brightness Hotkeys")
+            .add(brightness_items);
+
+        // --- Contrast bindings ---
+        let mut contrast_items = widget::column::with_capacity(
+            self.config.hotkeys.contrast_bindings.len() + 1,
+        )
+        .spacing(4);
+
+        for (i, binding) in self.config.hotkeys.contrast_bindings.iter().enumerate() {
+            let dir = match binding.direction {
+                StepDirection::Up => "Up",
+                StepDirection::Down => "Down",
+            };
+            let label = format!(
+                "Monitor {} Contrast {} : {}",
+                binding.monitor_id, dir, binding.hotkey
+            );
+            contrast_items = contrast_items.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body(label).width(Length::Fill))
+                    .push(
+                        widget::button::destructive("Remove")
+                            .on_press(Message::RemoveHotkeyBinding(
+                                i,
+                                BindingCategory::Contrast,
+                            )),
+                    )
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+            );
         }
 
-        let add_button = widget::button::standard("+ Add Hotkey").on_press(Message::AddHotkey);
+        let contrast_section = cosmic::widget::settings::section()
+            .title("Contrast Hotkeys")
+            .add(contrast_items);
 
-        let turn_off_labels: Vec<&str> =
-            TurnOffBehavior::ALL.iter().map(|b| b.label()).collect();
-        let turn_off_idx = TurnOffBehavior::ALL
-            .iter()
-            .position(|b| *b == self.config.turn_off_behavior);
-        let turn_off_row = widget::row::with_capacity(2)
-            .push(widget::text::body("\"Turn Off\" action behavior").width(Length::FillPortion(2)))
-            .push(widget::dropdown(turn_off_labels, turn_off_idx, |idx| {
-                Message::SetTurnOffBehavior(TurnOffBehavior::ALL[idx])
-            }))
-            .spacing(space_s)
-            .align_y(Alignment::Center);
+        // --- Input switch bindings ---
+        let mut input_items = widget::column::with_capacity(
+            self.config.hotkeys.input_switch_bindings.len() + 1,
+        )
+        .spacing(4);
 
-        let turn_off_section = cosmic::widget::settings::section()
-            .title("Turn Off Behavior")
-            .add(turn_off_row);
+        for (i, binding) in self.config.hotkeys.input_switch_bindings.iter().enumerate()
+        {
+            let label = format!(
+                "Monitor {} -> {} : {}",
+                binding.monitor_id, binding.input_source, binding.hotkey
+            );
+            input_items = input_items.push(
+                widget::row::with_capacity(2)
+                    .push(widget::text::body(label).width(Length::Fill))
+                    .push(
+                        widget::button::destructive("Remove")
+                            .on_press(Message::RemoveHotkeyBinding(
+                                i,
+                                BindingCategory::InputSwitch,
+                            )),
+                    )
+                    .align_y(Alignment::Center)
+                    .spacing(space_s),
+            );
+        }
 
-        let save_row = widget::row::with_capacity(1)
-            .push(widget::button::suggested("Save Configuration").on_press(Message::SaveConfig));
+        let input_section = cosmic::widget::settings::section()
+            .title("Input Switch Hotkeys")
+            .add(input_items);
 
-        let content = widget::column::with_capacity(6)
+        // --- Hotkey recording UI or Quick-add buttons ---
+        let add_section = match &self.recording_state {
+            RecordingState::NotRecording => {
+                // Show add buttons for each monitor
+                let mut add_buttons = widget::column::with_capacity(self.monitors.len())
+                    .spacing(space_s);
+
+                for mon in &self.monitors {
+                    let mid = mon.info.id;
+                    let monitor_label = if mon.info.name.is_empty() {
+                        format!("Monitor {}", mid)
+                    } else {
+                        mon.info.name.clone()
+                    };
+                    let row = widget::row::with_capacity(5)
+                        .push(widget::text::body(monitor_label).width(Length::FillPortion(2)))
+                        .push(
+                            widget::button::standard("+ Bright Up")
+                                .on_press(Message::StartRecordingBrightness(mid, StepDirection::Up)),
+                        )
+                        .push(
+                            widget::button::standard("+ Bright Down")
+                                .on_press(Message::StartRecordingBrightness(mid, StepDirection::Down)),
+                        )
+                        .push(
+                            widget::button::standard("+ Contrast Up")
+                                .on_press(Message::StartRecordingContrast(mid, StepDirection::Up)),
+                        )
+                        .push(
+                            widget::button::standard("+ Contrast Down")
+                                .on_press(Message::StartRecordingContrast(mid, StepDirection::Down)),
+                        )
+                        .spacing(space_s)
+                        .align_y(Alignment::Center);
+
+                    add_buttons = add_buttons.push(row);
+                    
+                    // Add input source buttons for this monitor
+                    let input_row = widget::row::with_capacity(11)
+                        .push(widget::text::body("").width(Length::FillPortion(2)))
+                        .push(widget::button::standard("+ HDMI1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Hdmi1)))
+                        .push(widget::button::standard("+ HDMI2").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Hdmi2)))
+                        .push(widget::button::standard("+ DP1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Dp1)))
+                        .push(widget::button::standard("+ DP2").on_press(Message::StartRecordingInputSwitch(mid, InputSource::Dp2)))
+                        .push(widget::button::standard("+ USB-C1").on_press(Message::StartRecordingInputSwitch(mid, InputSource::UsbC1)))
+                        .spacing(space_s)
+                        .align_y(Alignment::Center);
+                    add_buttons = add_buttons.push(input_row);
+                }
+
+                cosmic::widget::settings::section()
+                    .title("Add Hotkey Bindings")
+                    .add(add_buttons)
+            }
+            recording_state => {
+                // Show recording panel
+                self.view_recording_panel(recording_state, space_s)
+            }
+        };
+
+        // --- Save button ---
+        let save_row = widget::row::with_capacity(1).push(
+            widget::button::suggested("Save Configuration")
+                .on_press(Message::SaveConfig),
+        );
+
+        let content = widget::column::with_capacity(7)
             .push(header)
             .push(description)
-            .push(cards)
-            .push(add_button)
-            .push(turn_off_section)
+            .push(brightness_section)
+            .push(contrast_section)
+            .push(input_section)
+            .push(add_section)
             .push(save_row)
             .spacing(space_s)
             .width(Length::Fill);
 
-        widget::scrollable(
-            widget::container(content).width(Length::Fill).max_width(800.0),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-
-    /// Render a single hotkey's card: accelerator controls + action chain.
-    fn view_hotkey_card(&self, hotkey: &Hotkey, space_s: u16) -> Element<'_, Message> {
-        let id = hotkey.id.clone();
-        let is_active = self.hotkey_status.get(&hotkey.id).copied().unwrap_or(false);
-        let recording_this =
-            matches!(&self.recording_state, RecordingState::Recording { hotkey_id, .. } if hotkey_id == &hotkey.id);
-
-        let status_dot = widget::text::body(if is_active { "●" } else { "○" });
-
-        let accel_row: Element<'_, Message> = if recording_this {
-            let (ctrl, alt, shift, win, key) = match &self.recording_state {
-                RecordingState::Recording { ctrl, alt, shift, win, key, .. } => {
-                    (*ctrl, *alt, *shift, *win, key.clone())
-                }
-                _ => unreachable!(),
-            };
-            let captured = if key.is_empty() {
-                "Waiting for key press...".to_string()
-            } else {
-                format!("Captured: {}", format_hotkey(ctrl, alt, shift, win, &key))
-            };
-            widget::row::with_capacity(2)
-                .push(widget::text::body(captured).width(Length::Fill))
-                .push(widget::button::standard("Cancel").on_press(Message::CancelRecording))
-                .spacing(space_s)
-                .align_y(Alignment::Center)
-                .into()
-        } else {
-            widget::row::with_capacity(5)
-                .push(status_dot)
-                .push(widget::text::body(hotkey.binding.to_string()).width(Length::Fill))
-                .push(widget::button::standard("Record").on_press(Message::StartRecording(id.clone())))
-                .push(widget::button::standard("Clear").on_press(Message::ClearBinding(id.clone())))
-                .push(
-                    widget::button::destructive("Delete Hotkey")
-                        .on_press(Message::DeleteHotkey(id.clone())),
-                )
-                .spacing(space_s)
-                .align_y(Alignment::Center)
-                .into()
-        };
-
-        let mut actions_col =
-            widget::column::with_capacity(hotkey.actions.len() + 1).spacing(space_s);
-
-        for (idx, action) in hotkey.actions.iter().enumerate() {
-            actions_col = actions_col.push(self.view_action_row(&id, idx, action, space_s));
-        }
-
-        actions_col = actions_col.push(
-            widget::button::standard("+ Add Action").on_press(Message::AddAction(id.clone())),
-        );
-
-        let content = widget::column::with_capacity(2)
-            // Match the action cards' horizontal padding so the accelerator row's
-            // trailing buttons (Cancel / Delete Hotkey) line up with each action
-            // row's Delete button below.
-            .push(widget::container(accel_row).padding([0, space_s]))
-            .push(actions_col)
-            .spacing(space_s);
-
-        cosmic::widget::settings::section()
-            .title(format!("Hotkey: {}", hotkey.binding))
-            .add(content)
+        // Wrap in scrollable to ensure all content is accessible
+        widget::scrollable(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .into()
     }
-
-    /// Render a single action row within a hotkey's action chain.
-    fn view_action_row(
-        &self,
-        hotkey_id: &str,
-        idx: usize,
-        action: &HotkeyActionSpec,
-        space_s: u16,
-    ) -> Element<'_, Message> {
-        let id = hotkey_id.to_string();
-
-        let type_options: &[ActionType] = if action.target.supports_offset() {
-            ActionType::ALL
-        } else {
-            ActionType::NO_OFFSET
-        };
-        let type_labels: Vec<&str> = type_options.iter().map(|t| t.label()).collect();
-        let type_idx = type_options.iter().position(|t| *t == action.action_type);
-        let type_dropdown = widget::dropdown(type_labels, type_idx, {
-            let id = id.clone();
-            move |i| Message::SetActionType(id.clone(), idx, type_options[i])
-        });
-
-        let target_labels: Vec<&str> = ActionTarget::ALL.iter().map(|t| t.label()).collect();
-        let target_idx = ActionTarget::ALL.iter().position(|t| *t == action.target);
-        let target_dropdown = widget::dropdown(target_labels, target_idx, {
-            let id = id.clone();
-            move |i| Message::SetActionTarget(id.clone(), idx, ActionTarget::ALL[i])
-        });
-
-        let mut header_row = widget::row::with_capacity(4)
-            .push(type_dropdown)
-            .spacing(space_s)
-            .align_y(Alignment::Center);
-
-        if action.action_type != ActionType::Off {
-            header_row = header_row.push(target_dropdown);
-        }
-
-        header_row = header_row.push(widget::Space::new().width(Length::Fill)).push(
-            widget::button::destructive("Delete")
-                .on_press(Message::DeleteAction(id.clone(), idx)),
-        );
-
-        let mut rows = widget::column::with_capacity(3).push(header_row).spacing(space_s);
-
-        if action.action_type != ActionType::Off {
-            let value_control: Option<Element<'_, Message>> = match action.target {
-                ActionTarget::Brightness | ActionTarget::Contrast => {
-                    let id = id.clone();
-                    Some(
-                        widget::spin_button(
-                            action.value.to_string(),
-                            action.value,
-                            1i32,
-                            -200i32,
-                            200i32,
-                            move |v| Message::SetActionValue(id.clone(), idx, v),
-                        )
-                        .into(),
-                    )
-                }
-                ActionTarget::CustomVcp => {
-                    let id_val = id.clone();
-                    let id_code = id.clone();
-                    let value_row = widget::row::with_capacity(4)
-                        .push(widget::text::body("VCP code"))
-                        .push(widget::spin_button(
-                            format!("0x{:02X}", action.vcp_code),
-                            action.vcp_code,
-                            1u8,
-                            0u8,
-                            255u8,
-                            move |v| Message::SetActionVcpCode(id_code.clone(), idx, v),
-                        ))
-                        .push(widget::text::body("Value"))
-                        .push(widget::spin_button(
-                            action.value.to_string(),
-                            action.value,
-                            1i32,
-                            -200i32,
-                            200i32,
-                            move |v| Message::SetActionValue(id_val.clone(), idx, v),
-                        ))
-                        .spacing(space_s)
-                        .align_y(Alignment::Center);
-                    Some(value_row.into())
-                }
-                ActionTarget::InputSource => {
-                    if action.all_monitors {
-                        let labels: Vec<String> =
-                            INPUT_SOURCES.iter().map(|s| s.to_string()).collect();
-                        let sel = input_source_index(&action.input_source);
-                        let id = id.clone();
-                        Some(
-                            widget::dropdown(labels, sel, move |i| {
-                                Message::SetActionInputSource(id.clone(), idx, INPUT_SOURCES[i])
-                            })
-                            .into(),
-                        )
-                    } else {
-                        // Per-monitor input pickers are rendered in the monitor
-                        // section below.
-                        None
-                    }
-                }
-                ActionTarget::PowerMode => {
-                    let labels: Vec<String> = POWER_MODES.iter().map(|m| m.to_string()).collect();
-                    let sel = power_mode_index(&action.power_mode);
-                    let id = id.clone();
-                    Some(
-                        widget::dropdown(labels, sel, move |i| {
-                            Message::SetActionPowerMode(id.clone(), idx, POWER_MODES[i])
-                        })
-                        .into(),
-                    )
-                }
-                ActionTarget::Profile => {
-                    let id = id.clone();
-                    if self.profiles.is_empty() {
-                        Some(widget::text::body("No profiles saved yet.").into())
-                    } else {
-                        let sel = self.profiles.iter().position(|p| p == &action.profile_name);
-                        let profiles = self.profiles.clone();
-                        Some(
-                            widget::dropdown(self.profiles.clone(), sel, move |i| {
-                                Message::SetActionProfile(id.clone(), idx, profiles[i].clone())
-                            })
-                            .into(),
-                        )
-                    }
-                }
-            };
-
-            if let Some(control) = value_control {
-                rows = rows.push(control);
-            }
-        }
-
-        // Monitor selection. Input Source actions get per-monitor input pickers
-        // so a single hotkey can switch different monitors to different inputs;
-        // other targets get simple monitor checkboxes.
-        if action.target == ActionTarget::InputSource {
-            let all_checkbox = {
-                let id = id.clone();
-                widget::checkbox(action.all_monitors)
-                    .label("All displays use the same input")
-                    .on_toggle(move |checked| {
-                        Message::ToggleActionAllMonitors(id.clone(), idx, checked)
-                    })
-            };
-            rows = rows.push(all_checkbox);
-
-            if !action.all_monitors {
-                for mon in &self.monitors {
-                    let mid = mon.info.id;
-                    let label = if mon.info.name.is_empty() {
-                        format!("Monitor {mid}")
-                    } else {
-                        mon.info.name.clone()
-                    };
-
-                    // Options: "Don't change" (index 0) then every input source.
-                    let mut labels: Vec<String> = Vec::with_capacity(INPUT_SOURCES.len() + 1);
-                    labels.push("— Don't change —".to_string());
-                    labels.extend(INPUT_SOURCES.iter().map(|s| s.to_string()));
-
-                    let current = action
-                        .monitor_inputs
-                        .iter()
-                        .find(|mi| mi.monitor_id == mid)
-                        .map(|mi| mi.input_source);
-                    let sel = match current {
-                        Some(src) => input_source_index(&src).map(|i| i + 1),
-                        None => Some(0),
-                    };
-
-                    let id = id.clone();
-                    let row = widget::row::with_capacity(2)
-                        .push(widget::text::body(label).width(Length::FillPortion(2)))
-                        .push(widget::dropdown(labels, sel, move |i| {
-                            let source = if i == 0 { None } else { Some(INPUT_SOURCES[i - 1]) };
-                            Message::SetMonitorInput(id.clone(), idx, mid, source)
-                        }))
-                        .spacing(space_s)
-                        .align_y(Alignment::Center);
-                    rows = rows.push(row);
-                }
-            }
-        } else {
-            let all_checkbox = {
-                let id = id.clone();
-                widget::checkbox(action.all_monitors)
-                    .label("All Displays")
-                    .on_toggle(move |checked| {
-                        Message::ToggleActionAllMonitors(id.clone(), idx, checked)
-                    })
-            };
-
-            let mut monitors_row = widget::row::with_capacity(self.monitors.len() + 1)
-                .push(all_checkbox)
-                .spacing(space_s)
-                .align_y(Alignment::Center);
-
-            if !action.all_monitors {
-                for mon in &self.monitors {
-                    let mid = mon.info.id;
-                    let checked = action.monitors.contains(&mid);
-                    let label = if mon.info.name.is_empty() {
-                        format!("Monitor {mid}")
-                    } else {
-                        mon.info.name.clone()
-                    };
-                    let id = id.clone();
-                    monitors_row = monitors_row.push(
-                        widget::checkbox(checked)
-                            .label(label)
-                            .on_toggle(move |c| Message::ToggleActionMonitor(id.clone(), idx, mid, c)),
-                    );
-                }
-            }
-
-            rows = rows.push(monitors_row);
-        }
-
-        widget::container(rows)
-            .class(cosmic::theme::Container::Card)
-            .padding(space_s)
-            .into()
-    }
-
 
     /// View for the settings page (step sizes and other config).
     fn view_settings(&self) -> Element<'_, Message> {
@@ -1704,361 +1273,157 @@ impl AppModel {
             .width(Length::Fill);
 
         // Wrap in scrollable to ensure all content is accessible
-        widget::scrollable(
-            widget::container(content).width(Length::Fill).max_width(700.0),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        widget::scrollable(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
-    /// View for the About page.
-    fn view_about(&self) -> Element<'_, Message> {
-        widget::scrollable(
-            cosmic::widget::about(&self.about, |url| Message::OpenUrl(url.to_owned())),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
+    /// View for the hotkey recording panel.
+    fn view_recording_panel(&self, recording_state: &RecordingState, space_s: u16) -> cosmic::widget::settings::Section<'_, Message> {
+        let (action_desc, _monitor_id, ctrl, alt, shift, win, key) = match recording_state {
+            RecordingState::RecordingBrightness { monitor_id, direction, ctrl, alt, shift, win, key } => {
+                let dir = match direction {
+                    StepDirection::Up => "Up",
+                    StepDirection::Down => "Down",
+                };
+                (format!("Monitor {} Brightness {}", monitor_id, dir), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
+            }
+            RecordingState::RecordingContrast { monitor_id, direction, ctrl, alt, shift, win, key } => {
+                let dir = match direction {
+                    StepDirection::Up => "Up",
+                    StepDirection::Down => "Down",
+                };
+                (format!("Monitor {} Contrast {}", monitor_id, dir), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
+            }
+            RecordingState::RecordingInputSwitch { monitor_id, input_source, ctrl, alt, shift, win, key } => {
+                (format!("Monitor {} Switch to {}", monitor_id, input_source), *monitor_id, *ctrl, *alt, *shift, *win, key.clone())
+            }
+            RecordingState::NotRecording => {
+                return cosmic::widget::settings::section()
+                    .title("Recording")
+                    .add(widget::text::body("Not recording"));
+            }
+        };
 
-    /// View for the monitor-layout profiles page.
-    fn view_profiles(&self) -> Element<'_, Message> {
-        let space_s = cosmic::theme::spacing().space_s;
+        let title = widget::text::title4(format!("Recording: {}", action_desc));
+        
+        // Build current display
+        let current_display = format_hotkey(ctrl, alt, shift, win, &key);
+        
+        // Instruction text
+        let instruction = widget::text::title4("Press your desired key combination now...");
+        
+        let current_text = if !key.is_empty() {
+            widget::text::title3(format!("Captured: {}", current_display))
+        } else {
+            widget::text::body("Waiting for key press...")
+        };
 
-        let header = widget::text::title3("Monitor Layout Profiles");
-        let description = widget::text::body(
-            "Save the current monitor arrangement (resolution, position, primary, \
-             refresh rate, rotation, scaling) as a profile and restore it later \
-             with one click, a hotkey, or from the tray.",
+        // Help text
+        let help_text = widget::text::caption(
+            "Press any combination like: Ctrl+Alt+F1, Ctrl+Shift+A, Win+ArrowUp, etc.\nThe hotkey will be saved automatically when you press it."
         );
 
-        // Saved profiles list.
-        let mut items =
-            widget::column::with_capacity(self.profiles.len() + 1).spacing(4);
-        if self.profiles.is_empty() {
-            items = items.push(widget::text::body("No profiles saved yet."));
-        } else {
-            for name in &self.profiles {
-                let row = widget::row::with_capacity(4)
-                    .push(widget::text::body(name.clone()).width(Length::Fill))
-                    .push(
-                        widget::button::standard("Apply")
-                            .on_press(Message::ApplyProfile(name.clone())),
-                    )
-                    .push(
-                        widget::button::standard("Set Hotkey")
-                            .on_press(Message::AddProfileHotkey(name.clone())),
-                    )
-                    .push(
-                        widget::button::destructive("Delete")
-                            .on_press(Message::DeleteProfile(name.clone())),
-                    )
-                    .spacing(space_s)
-                    .align_y(Alignment::Center);
-                items = items.push(row);
-            }
-        }
-        let profiles_section = cosmic::widget::settings::section()
-            .title("Saved Profiles")
-            .add(items);
+        // Action buttons
+        let buttons_row = widget::row::with_capacity(1)
+            .push(widget::button::standard("Cancel").on_press(Message::CancelRecording))
+            .spacing(space_s);
 
-        let mut content = widget::column::with_capacity(4)
-            .push(header)
-            .push(description)
-            .spacing(space_s)
-            .width(Length::Fill);
+        let content = widget::column::with_capacity(6)
+            .push(title)
+            .push(instruction)
+            .push(current_text)
+            .push(help_text)
+            .push(buttons_row)
+            .spacing(space_s * 2);
 
-        {
-            let name_input =
-                widget::text_input("New profile name", &self.profile_name_input)
-                    .on_input(Message::ProfileNameInput)
-                    .on_submit(Message::SaveCurrentProfile)
-                    .width(Length::Fill);
-            let save_button = widget::button::suggested("Save Current Layout")
-                .on_press(Message::SaveCurrentProfile(self.profile_name_input.clone()));
-            let save_row = widget::row::with_capacity(2)
-                .push(name_input)
-                .push(save_button)
-                .spacing(space_s)
-                .align_y(Alignment::Center);
-            let save_section = cosmic::widget::settings::section()
-                .title("Save Current Layout")
-                .add(save_row);
-            content = content.push(save_section);
-        }
-
-        content = content.push(profiles_section);
-
-        widget::scrollable(
-            widget::container(content).width(Length::Fill).max_width(700.0),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    }
-
-    /// Find the nav position of a page, if present.
-    fn nav_position_of(&self, target: Page) -> Option<u16> {
-        self.nav.iter().find_map(|id| {
-            if self.nav.data::<Page>(id) == Some(&target) {
-                self.nav.position(id)
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Find a hotkey by id, mutably.
-    fn hotkey_mut(&mut self, id: &str) -> Option<&mut Hotkey> {
-        self.config.hotkeys.hotkeys.iter_mut().find(|h| h.id == id)
-    }
-
-    /// Find an action within a hotkey by id + index, mutably.
-    fn action_mut(&mut self, id: &str, idx: usize) -> Option<&mut HotkeyActionSpec> {
-        self.hotkey_mut(id).and_then(|h| h.actions.get_mut(idx))
-    }
-
-    /// Re-register global hotkeys from the current config, recreating the
-    /// manager if needed, and refresh the cached action map + status.
-    fn refresh_hotkey_registration(&mut self) {
-        if let Some(ref mut manager) = self.hotkey_manager {
-            manager.update(&self.config);
-            self.hotkey_action_map = manager.action_map();
-            self.hotkey_status = manager.status();
-        } else {
-            self.hotkey_manager = HotkeyManager::new(&self.config);
-            self.hotkey_action_map = self
-                .hotkey_manager
-                .as_ref()
-                .map(|m| m.action_map())
-                .unwrap_or_else(|| Arc::new(HashMap::new()));
-            self.hotkey_status = self
-                .hotkey_manager
-                .as_ref()
-                .map(|m| m.status())
-                .unwrap_or_default();
-        }
-    }
-
-    /// Cheaply refresh only the cached hotkey action-chain payloads, without
-    /// re-registering hotkeys with the OS. Use for edits that change an
-    /// action's fields but not its key binding.
-    fn refresh_hotkey_actions(&mut self) {
-        if let Some(ref mut manager) = self.hotkey_manager {
-            manager.rebuild_action_map(&self.config);
-            self.hotkey_action_map = manager.action_map();
-        }
+        cosmic::widget::settings::section()
+            .title("Recording Hotkey")
+            .add(content)
     }
 
     // -----------------------------------------------------------------------
     // Hotkey action handler
     // -----------------------------------------------------------------------
 
-    /// Turn off displays per the configured `TurnOffBehavior`, for the given
-    /// resolved monitor id list (used only by the Ddc variant).
-    fn dispatch_turn_off(&self, monitors: &[u32]) -> cosmic::app::Task<Message> {
-        let behavior = self.config.turn_off_behavior;
-        let mut tasks: Vec<cosmic::app::Task<Message>> = Vec::new();
-
-        if behavior.uses_soft() {
-            tasks.push(cosmic::app::Task::perform(
-                async { tokio::task::spawn_blocking(ccd::turn_off_monitors).await },
-                |result| match result {
-                    Ok(()) => cosmic::Action::App(Message::MonitorsPoweredOff),
-                    Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-                },
-            ));
-        }
-
-        if behavior.uses_ddc() {
-            for &monitor_id in monitors {
-                tasks.push(cosmic::app::Task::perform(
+    fn handle_hotkey_action(
+        &mut self,
+        action: HotkeyAction,
+    ) -> cosmic::app::Task<Message> {
+        match action {
+            HotkeyAction::SwitchInput {
+                monitor_id,
+                input_source,
+            } => {
+                if let Some(m) =
+                    self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
+                {
+                    m.input_source = input_source;
+                }
+                cosmic::app::Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            ddc::set_power_mode(monitor_id, PowerMode::Off)
+                            ddc::set_input_source(monitor_id, input_source)
                         })
                         .await
                     },
                     move |result| match result {
-                        Ok(Ok(())) => {
-                            cosmic::Action::App(Message::PowerModeApplied(monitor_id, PowerMode::Off))
-                        }
-                        Ok(Err(e)) => {
-                            cosmic::Action::App(Message::Error(format!("Power off error: {e}")))
-                        }
+                        Ok(Ok(())) => cosmic::Action::App(Message::InputSourceApplied(monitor_id, input_source)),
+                        Ok(Err(e)) => cosmic::Action::App(Message::Error(format!("Input switch error: {e}"))),
                         Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
                     },
-                ));
+                )
+            }
+
+            HotkeyAction::BrightnessUp { monitor_id } => {
+                let step = self.config.hotkeys.brightness_step;
+                if let Some(m) =
+                    self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
+                {
+                    let new_val = (m.brightness + step).min(m.brightness_max);
+                    m.brightness = new_val;
+                    return self.update(Message::SetBrightness(monitor_id, new_val));
+                }
+                cosmic::app::Task::none()
+            }
+
+            HotkeyAction::BrightnessDown { monitor_id } => {
+                let step = self.config.hotkeys.brightness_step;
+                if let Some(m) =
+                    self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
+                {
+                    let new_val = m.brightness.saturating_sub(step);
+                    m.brightness = new_val;
+                    return self.update(Message::SetBrightness(monitor_id, new_val));
+                }
+                cosmic::app::Task::none()
+            }
+
+            HotkeyAction::ContrastUp { monitor_id } => {
+                let step = self.config.hotkeys.contrast_step;
+                if let Some(m) =
+                    self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
+                {
+                    let new_val = (m.contrast + step).min(m.contrast_max);
+                    m.contrast = new_val;
+                    return self.update(Message::SetContrast(monitor_id, new_val));
+                }
+                cosmic::app::Task::none()
+            }
+
+            HotkeyAction::ContrastDown { monitor_id } => {
+                let step = self.config.hotkeys.contrast_step;
+                if let Some(m) =
+                    self.monitors.iter_mut().find(|m| m.info.id == monitor_id)
+                {
+                    let new_val = m.contrast.saturating_sub(step);
+                    m.contrast = new_val;
+                    return self.update(Message::SetContrast(monitor_id, new_val));
+                }
+                cosmic::app::Task::none()
             }
         }
-
-        cosmic::app::Task::batch(tasks)
-    }
-
-    /// Resolve which monitor ids an action applies to.
-    fn resolve_monitors(&self, action: &HotkeyActionSpec) -> Vec<u32> {
-        if action.all_monitors {
-            self.monitors.iter().map(|m| m.info.id).collect()
-        } else {
-            action.monitors.clone()
-        }
-    }
-
-    fn handle_hotkey_action(&mut self, actions: Vec<HotkeyActionSpec>) -> cosmic::app::Task<Message> {
-        let mut tasks: Vec<cosmic::app::Task<Message>> = Vec::new();
-
-        for action in &actions {
-            if action.action_type == ActionType::Off {
-                let monitors = self.resolve_monitors(action);
-                tasks.push(self.dispatch_turn_off(&monitors));
-                continue;
-            }
-
-            if action.target == ActionTarget::Profile {
-                tasks.push(self.update(Message::ApplyProfile(action.profile_name.clone())));
-                continue;
-            }
-
-            let monitors = self.resolve_monitors(action);
-
-            match action.target {
-                ActionTarget::Brightness => {
-                    for monitor_id in monitors {
-                        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-                            let new_val = match action.action_type {
-                                ActionType::Set => (action.value.max(0) as u16).min(m.brightness_max),
-                                ActionType::Offset => {
-                                    let v = i32::from(m.brightness) + action.value;
-                                    (v.max(0) as u16).min(m.brightness_max)
-                                }
-                                ActionType::Off => unreachable!(),
-                            };
-                            m.brightness = new_val;
-                            tasks.push(self.update(Message::SetBrightness(monitor_id, new_val)));
-                        }
-                    }
-                }
-                ActionTarget::Contrast => {
-                    for monitor_id in monitors {
-                        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-                            let new_val = match action.action_type {
-                                ActionType::Set => (action.value.max(0) as u16).min(m.contrast_max),
-                                ActionType::Offset => {
-                                    let v = i32::from(m.contrast) + action.value;
-                                    (v.max(0) as u16).min(m.contrast_max)
-                                }
-                                ActionType::Off => unreachable!(),
-                            };
-                            m.contrast = new_val;
-                            tasks.push(self.update(Message::SetContrast(monitor_id, new_val)));
-                        }
-                    }
-                }
-                ActionTarget::InputSource => {
-                    // In "all displays" mode every monitor gets the same input;
-                    // otherwise each monitor uses its own configured input.
-                    let pairs: Vec<(u32, InputSource)> = if action.all_monitors {
-                        monitors
-                            .iter()
-                            .map(|&mid| (mid, action.input_source))
-                            .collect()
-                    } else {
-                        action
-                            .monitor_inputs
-                            .iter()
-                            .map(|mi| (mi.monitor_id, mi.input_source))
-                            .collect()
-                    };
-                    for (monitor_id, input_source) in pairs {
-                        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-                            m.input_source = input_source;
-                        }
-                        tasks.push(cosmic::app::Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || {
-                                    ddc::set_input_source(monitor_id, input_source)
-                                })
-                                .await
-                            },
-                            move |result| match result {
-                                Ok(Ok(())) => cosmic::Action::App(Message::InputSourceApplied(
-                                    monitor_id,
-                                    input_source,
-                                )),
-                                Ok(Err(e)) => cosmic::Action::App(Message::Error(format!(
-                                    "Input switch error: {e}"
-                                ))),
-                                Err(e) => {
-                                    cosmic::Action::App(Message::Error(format!("Task join error: {e}")))
-                                }
-                            },
-                        ));
-                    }
-                }
-                ActionTarget::PowerMode => {
-                    for monitor_id in monitors {
-                        let power_mode = action.power_mode;
-                        tasks.push(cosmic::app::Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || {
-                                    ddc::set_power_mode(monitor_id, power_mode)
-                                })
-                                .await
-                            },
-                            move |result| match result {
-                                Ok(Ok(())) => {
-                                    cosmic::Action::App(Message::PowerModeApplied(monitor_id, power_mode))
-                                }
-                                Ok(Err(e)) => {
-                                    cosmic::Action::App(Message::Error(format!("Power mode error: {e}")))
-                                }
-                                Err(e) => {
-                                    cosmic::Action::App(Message::Error(format!("Task join error: {e}")))
-                                }
-                            },
-                        ));
-                    }
-                }
-                ActionTarget::CustomVcp => {
-                    for monitor_id in monitors {
-                        let code = action.vcp_code;
-                        let offset = action.value;
-                        let is_offset = action.action_type == ActionType::Offset;
-                        tasks.push(cosmic::app::Task::perform(
-                            async move {
-                                tokio::task::spawn_blocking(move || -> anyhow::Result<u16> {
-                                    let value = if is_offset {
-                                        let (current, max) = ddc::get_vcp(monitor_id, code)?;
-                                        let v = i32::from(current) + offset;
-                                        v.max(0).min(i32::from(max)) as u16
-                                    } else {
-                                        offset.max(0) as u16
-                                    };
-                                    ddc::set_vcp(monitor_id, code, value)?;
-                                    Ok(value)
-                                })
-                                .await
-                            },
-                            move |result| match result {
-                                Ok(Ok(value)) => {
-                                    cosmic::Action::App(Message::CustomVcpApplied(monitor_id, code, value))
-                                }
-                                Ok(Err(e)) => {
-                                    cosmic::Action::App(Message::Error(format!("Custom VCP error: {e}")))
-                                }
-                                Err(e) => {
-                                    cosmic::Action::App(Message::Error(format!("Task join error: {e}")))
-                                }
-                            },
-                        ));
-                    }
-                }
-                ActionTarget::Profile => unreachable!(),
-            }
-        }
-
-        cosmic::app::Task::batch(tasks)
     }
 
     // -----------------------------------------------------------------------

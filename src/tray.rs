@@ -3,15 +3,16 @@
 //! Provides a tray icon with menu options to show the window or exit the application.
 
 use cosmic::iced::{
+    Subscription,
     futures::{SinkExt, Stream},
-    stream, Subscription,
+    stream,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     TrayIcon, TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 /// Messages emitted by the system tray.
@@ -201,19 +202,21 @@ impl Hash for TrayId {
 fn create_tray_icon() -> Result<tray_icon::Icon, tray_icon::BadIcon> {
     // Embed the ICO file at compile time
     static ICON_DATA: &[u8] = include_bytes!("../icon.ico");
-    
-    log::debug!("Creating tray icon, embedded data size: {} bytes", ICON_DATA.len());
-    
+
+    log::debug!(
+        "Creating tray icon, embedded data size: {} bytes",
+        ICON_DATA.len()
+    );
+
     // Write to temp file since tray_icon can load ICO from path
     let temp_path = std::env::temp_dir().join("windisplaymanager_icon.ico");
-    std::fs::write(&temp_path, ICON_DATA)
-        .map_err(|e| {
-            log::error!("Failed to write temp icon file: {e}");
-            tray_icon::BadIcon::OsError(e)
-        })?;
-    
+    std::fs::write(&temp_path, ICON_DATA).map_err(|e| {
+        log::error!("Failed to write temp icon file: {e}");
+        tray_icon::BadIcon::OsError(e)
+    })?;
+
     log::debug!("Wrote temp icon to: {}", temp_path.display());
-    
+
     let result = tray_icon::Icon::from_path(&temp_path, None);
     match &result {
         Ok(_) => log::debug!("Tray icon loaded successfully"),

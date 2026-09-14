@@ -45,15 +45,34 @@ Each hotkey card shows:
 | **Apply Profile** | Applies a saved [display profile]({{ site.baseurl }}/docs/profiles/). |
 | **Custom VCP Code** | Write any raw DDC/CI VCP feature code (in hex). Set writes the value directly; Offset reads the monitor's current value first and adds the delta. |
 
+### Editing an action
+
+Actions are edited vertically in four labeled sections:
+
+- **Actions** — choose **Set**, **Offset**, or **Turn Off**.
+- **Commands** — choose Brightness, Contrast, Input Source, Power Mode,
+   Apply Profile, or Custom VCP Code.
+- **Value** — numeric values can be typed directly or adjusted with the
+   decrement and increment buttons. Other commands show their appropriate
+   dropdown.
+- **Displays** — use switches for **All displays** and each detected monitor.
+
+Turn Off actions only show Actions and Displays because they do not need a
+command or value.
+
 ### Which monitors
 
-Every action applies either to **All Displays** or to a **specific set of
-monitors** you choose with checkboxes.
+Every action applies either to **All displays** or to a specific set of
+monitors selected with switches. Turning off one monitor while **All displays**
+is enabled changes the action to an explicit selection containing the other
+detected monitors. When every connected monitor is selected again, the **All
+displays** switch is shown as enabled. Turning that switch off clears the
+explicit monitor selection.
 
-**Input Source** actions have an extra convenience: turn off *"All displays use
-the same input"* and you get a dropdown per monitor, so one hotkey can switch
-*monitor 1 to DisplayPort* and *monitor 2 to HDMI* simultaneously. Leave a
-monitor on **"— Don't change —"** to skip it.
+**Input Source** actions show an input dropdown for each selected monitor when
+**All displays** is off, so one hotkey can switch different monitors to
+different inputs. Selecting every monitor does not replace those distinct input
+choices. An unselected monitor is left unchanged.
 
 ## Creating a hotkey
 
