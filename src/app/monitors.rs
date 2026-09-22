@@ -245,7 +245,7 @@ impl AppModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::views::{PendingValue, input_presentation, scalar_presentation};
+    use crate::app::monitor_views::{PendingValue, input_presentation, scalar_presentation};
     use crate::ddc::tests::monitor_state;
 
     #[test]

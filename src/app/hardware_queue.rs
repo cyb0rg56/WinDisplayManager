@@ -170,7 +170,7 @@ mod tests {
     use super::*;
     use crate::app::actions::{ActionExecutor, HardwareJob};
     use crate::app::debounce::SliderDebounce;
-    use crate::app::views::{
+    use crate::app::monitor_views::{
         MonitorPending, PendingValue, input_presentation, scalar_presentation,
     };
     use crate::ddc::{

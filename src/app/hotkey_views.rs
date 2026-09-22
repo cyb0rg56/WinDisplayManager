@@ -3,10 +3,15 @@ use super::hotkey_editor::{
 };
 use super::{AppModel, INPUT_SOURCES, Message, POWER_MODES, RecordingState};
 use crate::config::{ActionTarget, ActionType, Hotkey, HotkeyActionSpec, MonitorTarget};
+use crate::ddc::PowerMode;
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget;
+
+fn power_mode_index(mode: &PowerMode) -> Option<usize> {
+    POWER_MODES.iter().position(|candidate| candidate == mode)
+}
 
 impl AppModel {
     pub(super) fn view_hotkeys_current(&self) -> Element<'_, Message> {
@@ -259,7 +264,7 @@ impl AppModel {
                 }
                 ActionTarget::PowerMode => {
                     let labels: Vec<String> = POWER_MODES.iter().map(ToString::to_string).collect();
-                    let selected = super::views::power_mode_index(&action.power_mode);
+                    let selected = power_mode_index(&action.power_mode);
                     Some(
                         widget::dropdown(labels, selected, {
                             let id = id.clone();

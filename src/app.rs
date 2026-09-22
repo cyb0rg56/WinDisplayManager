@@ -4,8 +4,11 @@ mod debounce;
 mod hardware_queue;
 mod hotkey_editor;
 mod hotkey_views;
+mod monitor_views;
 mod monitors;
 mod profile_handlers;
+mod profile_views;
+mod settings_views;
 mod views;
 
 use self::actions::HardwareJob;
