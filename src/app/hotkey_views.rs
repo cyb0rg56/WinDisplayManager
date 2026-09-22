@@ -7,9 +7,11 @@ use crate::config::{
     hotkey_headings,
 };
 use crate::ddc::PowerMode;
+use crate::icons::{self, AppIcon};
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::{Alignment, Length};
+use cosmic::theme;
 use cosmic::widget;
 
 fn power_mode_index(mode: &PowerMode) -> Option<usize> {
@@ -78,11 +80,22 @@ impl AppModel {
         let summary = widget::row::with_capacity(5)
             .push(widget::text::body(hotkey.binding.to_string()).width(Length::Fill))
             .push(widget::text::caption(status))
-            .push(
-                widget::button::standard(if expanded { "Collapse" } else { "Edit" })
-                    .on_press(Message::ToggleHotkeyEditor(id.clone())),
-            )
-            .push(widget::button::destructive("Delete").on_press(Message::DeleteHotkey(id.clone())))
+            .push(icons::icon_button(
+                if expanded {
+                    AppIcon::Collapse
+                } else {
+                    AppIcon::Edit
+                },
+                if expanded { "Collapse" } else { "Edit" },
+                theme::Button::Standard,
+                Message::ToggleHotkeyEditor(id.clone()),
+            ))
+            .push(icons::icon_button(
+                AppIcon::Trash,
+                "Delete",
+                theme::Button::Destructive,
+                Message::DeleteHotkey(id.clone()),
+            ))
             .spacing(space_s)
             .align_y(Alignment::Center);
 
@@ -164,10 +177,12 @@ impl AppModel {
                 move |selected| Message::SetActionType(id.clone(), idx, type_options[selected])
             }))
             .push(widget::Space::new().width(Length::Fill))
-            .push(
-                widget::button::destructive("Delete Action")
-                    .on_press(Message::DeleteAction(id.clone(), idx)),
-            )
+            .push(icons::icon_button(
+                AppIcon::Trash,
+                "Delete Action",
+                theme::Button::Destructive,
+                Message::DeleteAction(id.clone(), idx),
+            ))
             .spacing(space_s)
             .align_y(Alignment::Center);
         let mut fields = widget::column::with_capacity(5)

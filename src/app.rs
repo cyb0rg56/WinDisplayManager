@@ -680,11 +680,12 @@ impl cosmic::Application for AppModel {
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
-        vec![
-            widget::button::text("Refresh")
-                .on_press(Message::RefreshMonitors)
-                .into(),
-        ]
+        vec![crate::icons::icon_button(
+            crate::icons::AppIcon::Refresh,
+            "Refresh",
+            cosmic::theme::Button::Standard,
+            Message::RefreshMonitors,
+        )]
     }
 }
 

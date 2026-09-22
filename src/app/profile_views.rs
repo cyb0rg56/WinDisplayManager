@@ -1,6 +1,8 @@
 use super::{AppModel, Message};
+use crate::icons::{self, AppIcon};
 use cosmic::Element;
 use cosmic::iced::{Alignment, Length};
+use cosmic::theme;
 use cosmic::widget;
 
 impl AppModel {
@@ -66,10 +68,12 @@ impl AppModel {
                             .on_press(Message::DeleteProfile(name.clone())),
                     );
             } else {
-                row = row.push(
-                    widget::button::destructive("Delete")
-                        .on_press(Message::RequestDeleteProfile(name.clone())),
-                );
+                row = row.push(icons::icon_button(
+                    AppIcon::Trash,
+                    "Delete",
+                    theme::Button::Destructive,
+                    Message::RequestDeleteProfile(name.clone()),
+                ));
             }
             profiles = profiles.push(row);
         }
