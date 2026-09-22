@@ -11,8 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   validate:
@@ -20,26 +26,33 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install Rust format and lint components
-      run: rustup component add rustfmt clippy
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    - uses: Swatinem/rust-cache@v2
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Clippy
       run: cargo clippy --locked --all-targets -- -D warnings
     - name: Test
-      run: cargo test --locked --verbose
+      run: cargo test --locked
     - name: Build release
-      run: cargo build --release --locked --verbose
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: cargo build --release --locked
     - name: Build unsigned MSIX
+      if: startsWith(github.ref, 'refs/tags/v')
       shell: pwsh
       run: ./packaging/msix/build-msix.ps1
     - name: Stage release artifacts
+      if: startsWith(github.ref, 'refs/tags/v')
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path dist | Out-Null
         Copy-Item target/release/windisplaymanager_rs.exe dist/
         Copy-Item packaging/msix/obj/*.msix dist/
     - name: Upload release artifacts
+      if: startsWith(github.ref, 'refs/tags/v')
       uses: actions/upload-artifact@v4
       with:
         name: release-package

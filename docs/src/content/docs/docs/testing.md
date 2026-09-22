@@ -28,15 +28,18 @@ cargo build --release --locked
 pwsh .\packaging\msix\build-msix.ps1
 ```
 
-`cargo clippy --all-targets` type-checks the same targets as `cargo check`, so
-a separate check step is not required. The packaging script builds an
-**unsigned** MSIX and takes its four-part version from `Cargo.toml` (currently
-appended with `.0`). Do not pass `-Sign`. Signing and GitHub Release
-publication stay on tag workflows; pull requests must not receive release
-secrets.
+Pull requests run the first three commands in CI: formatting, Clippy, and
+tests. `cargo clippy --all-targets` type-checks the same targets as
+`cargo check`, so a separate check step is not required.
 
-`makeappx.exe` comes from the Windows 10/11 SDK. If it is missing locally, the
-unsigned package step is still required in CI.
+The release build and unsigned MSIX run in CI only for a `vX.Y.Z` tag. The
+packaging script builds an **unsigned** MSIX and takes its four-part version
+from `Cargo.toml` (currently appended with `.0`). Do not pass `-Sign`.
+Signing and GitHub Release publication stay on that tag workflow.
+
+`makeappx.exe` comes from the Windows 10/11 SDK. Run the packaging script
+locally when you want to check the package before tagging. CI runs it when
+the version tag is pushed.
 
 ## Tagging a release
 
@@ -62,9 +65,11 @@ git push origin v0.1.4
 Replace `0.1.4` with the version you committed. The tag has to point at the
 commit that contains that `Cargo.toml` version.
 
-Pushing the tag is the release gate. It runs the same validation as a pull
-request. If that passes, the release job checks the tag against `Cargo.toml`
-and publishes the already built artifacts. It does not rebuild or sign them.
+Pushing the tag is the release gate. It runs the same formatting, Clippy, and
+test checks as a pull request, then builds the release executable and the
+unsigned MSIX. If that passes, the release job checks the tag against
+`Cargo.toml` and publishes the already built artifacts. It does not rebuild
+or sign them.
 The GitHub Release receives:
 
 - `windisplaymanager_rs-v0.1.4.exe`
