@@ -1,10 +1,12 @@
 use super::AppModel;
 use super::{Message, Page, RecordingState};
 use crate::config::{
-    ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
+    ActionTarget, ActionType, AppConfig, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
+    MonitorTarget,
 };
-use crate::ddc::{InputSource, PowerMode};
+use crate::ddc::{InputSource, MonitorKey, PowerMode};
 use crate::hotkeys::HotkeyManager;
+use crate::persistence::LoadOutcome;
 use cosmic::iced::keyboard::{Key, Modifiers};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,34 +44,32 @@ pub(super) fn uses_monitor_inputs(action: &HotkeyActionSpec) -> bool {
     action.action_type != ActionType::Off && action.target == ActionTarget::InputSource
 }
 
-pub(super) fn explicit_monitor_ids(action: &HotkeyActionSpec) -> Vec<u32> {
-    if uses_monitor_inputs(action) && !action.monitor_inputs.is_empty() {
-        action
-            .monitor_inputs
-            .iter()
-            .map(|input| input.monitor_id)
-            .collect()
-    } else {
-        action.monitors.clone()
-    }
+pub(super) fn explicit_monitor_ids(action: &HotkeyActionSpec) -> Vec<MonitorTarget> {
+    action.explicit_targets()
 }
 
-pub(super) fn action_monitor_selected(action: &HotkeyActionSpec, monitor_id: u32) -> bool {
-    action.all_monitors || explicit_monitor_ids(action).contains(&monitor_id)
+pub(super) fn action_monitor_selected(
+    action: &HotkeyActionSpec,
+    monitor_id: &MonitorTarget,
+) -> bool {
+    action.all_monitors || explicit_monitor_ids(action).contains(monitor_id)
 }
 
-pub(super) fn action_master_selected(action: &HotkeyActionSpec, detected_ids: &[u32]) -> bool {
+pub(super) fn action_master_selected(
+    action: &HotkeyActionSpec,
+    detected_ids: &[MonitorTarget],
+) -> bool {
     action.all_monitors
         || (!detected_ids.is_empty()
             && detected_ids
                 .iter()
-                .all(|monitor_id| action_monitor_selected(action, *monitor_id)))
+                .all(|monitor_id| action_monitor_selected(action, monitor_id)))
 }
 
 pub(super) fn toggle_action_monitor(
     action: &mut HotkeyActionSpec,
-    detected_ids: &[u32],
-    monitor_id: u32,
+    detected_ids: &[MonitorTarget],
+    monitor_id: MonitorTarget,
     checked: bool,
 ) {
     if action.all_monitors {
@@ -79,7 +79,7 @@ pub(super) fn toggle_action_monitor(
             action.monitor_inputs = detected_ids
                 .iter()
                 .map(|monitor_id| MonitorInput {
-                    monitor_id: *monitor_id,
+                    monitor_id: monitor_id.clone(),
                     input_source: action.input_source,
                 })
                 .collect();
@@ -91,7 +91,7 @@ pub(super) fn toggle_action_monitor(
         .monitor_inputs
         .retain(|input| input.monitor_id != monitor_id);
     if checked {
-        action.monitors.push(monitor_id);
+        action.monitors.push(monitor_id.clone());
         if uses_monitor_inputs(action) {
             action.monitor_inputs.push(MonitorInput {
                 monitor_id,
@@ -450,7 +450,7 @@ impl AppModel {
                     .monitors
                     .iter()
                     .map(|monitor_id| MonitorInput {
-                        monitor_id: *monitor_id,
+                        monitor_id: monitor_id.clone(),
                         input_source: action.input_source,
                     })
                     .collect();
@@ -494,7 +494,7 @@ impl AppModel {
         &mut self,
         id: String,
         idx: usize,
-        monitor_id: u32,
+        monitor_id: MonitorTarget,
         source: Option<InputSource>,
     ) {
         if let Some(action) = self.action_mut(&id, idx) {
@@ -503,7 +503,7 @@ impl AppModel {
                 .monitor_inputs
                 .retain(|input| input.monitor_id != monitor_id);
             if let Some(input_source) = source {
-                action.monitors.push(monitor_id);
+                action.monitors.push(monitor_id.clone());
                 action.monitor_inputs.push(MonitorInput {
                     monitor_id,
                     input_source,
@@ -546,12 +546,45 @@ impl AppModel {
         &mut self,
         id: String,
         idx: usize,
-        monitor_id: u32,
+        monitor_id: MonitorTarget,
         checked: bool,
     ) {
-        let detected_ids: Vec<u32> = self.detected_monitors.iter().map(|m| m.id).collect();
+        let detected_ids: Vec<_> = self
+            .detected_monitors
+            .iter()
+            .map(|m| MonitorTarget::Stable(m.key.clone()))
+            .collect();
         if let Some(action) = self.action_mut(&id, idx) {
             toggle_action_monitor(action, &detected_ids, monitor_id, checked);
+        }
+        self.config_dirty = true;
+        self.refresh_hotkey_actions();
+    }
+
+    pub(super) fn rebind_monitor_target(
+        &mut self,
+        id: String,
+        idx: usize,
+        old: MonitorTarget,
+        key: MonitorKey,
+    ) {
+        if let Err(error) = MonitorTarget::Stable(key.clone()).resolve(&self.detected_monitors) {
+            self.status_message = error;
+            return;
+        }
+        if let Some(action) = self.action_mut(&id, idx) {
+            if let Err(error) = action.rebind_target(&old, key) {
+                self.status_message = error;
+                return;
+            }
+        }
+        self.config_dirty = true;
+        self.refresh_hotkey_actions();
+    }
+
+    pub(super) fn remove_monitor_target(&mut self, id: String, idx: usize, target: MonitorTarget) {
+        if let Some(action) = self.action_mut(&id, idx) {
+            action.remove_target(&target);
         }
         self.config_dirty = true;
         self.refresh_hotkey_actions();
@@ -562,7 +595,7 @@ impl AppModel {
             self.status_message = error;
             return cosmic::app::Task::none();
         }
-        if let Err(e) = self.config.save() {
+        if let Err(e) = self.config_store.save(&self.config) {
             self.status_message = format!("Failed to save config: {e}");
         } else {
             self.status_message = "Configuration saved and hotkeys activated.".into();
@@ -573,18 +606,84 @@ impl AppModel {
     }
 
     pub(super) fn toggle_hotkeys(&mut self, enabled: bool) -> cosmic::app::Task<Message> {
-        self.config.hotkeys_enabled = enabled;
-        if enabled {
-            self.status_message = "Hotkeys enabled".into();
-        } else {
-            self.status_message = "Hotkeys disabled".into();
+        match self
+            .config_store
+            .set_hotkeys_enabled(&mut self.config, enabled)
+        {
+            Ok(()) => {
+                self.status_message = if enabled {
+                    "Hotkeys enabled"
+                } else {
+                    "Hotkeys disabled"
+                }
+                .into();
+                self.refresh_hotkey_registration();
+            }
+            Err(error) => self.status_message = format!("Failed to save config: {error}"),
         }
-        // Auto-save the preference
-        if let Err(e) = self.config.save() {
-            self.status_message = format!("Failed to save config: {e}");
+        cosmic::app::Task::none()
+    }
+
+    pub(super) fn retry_config(&mut self) {
+        self.pending_config_reset = false;
+        match self.config_store.retry() {
+            LoadOutcome::Loaded(config) => {
+                self.install_recovered_config(config, "Configuration reloaded.")
+            }
+            LoadOutcome::Missing => self.install_recovered_config(
+                AppConfig::default(),
+                "No configuration file found; using defaults.",
+            ),
+            LoadOutcome::Failed(error) => {
+                self.status_message = format!("Configuration still needs recovery: {error}")
+            }
+        }
+    }
+
+    pub(super) fn recover_config_backup(&mut self) {
+        self.pending_config_reset = false;
+        match self.config_store.recover_backup() {
+            Ok(config) => {
+                self.install_recovered_config(config, "Configuration restored from backup.")
+            }
+            Err(error) => self.status_message = format!("Could not recover backup: {error}"),
+        }
+    }
+
+    pub(super) fn confirm_reset_config(&mut self) {
+        if !std::mem::take(&mut self.pending_config_reset)
+            || self.config_store.recovery_error().is_none()
+        {
+            return;
+        }
+        match self.config_store.reset_confirmed() {
+            Ok(config) => self.install_recovered_config(
+                config,
+                "Configuration reset to defaults. Existing backup retained.",
+            ),
+            Err(error) => self.status_message = format!("Could not reset configuration: {error}"),
+        }
+    }
+
+    fn install_recovered_config(&mut self, config: AppConfig, status: &str) {
+        self.config = config;
+        self.config_dirty = false;
+        self.recording_state = RecordingState::NotRecording;
+        self.expanded_hotkey = None;
+        self.value_drafts.clear();
+        self.vcp_drafts.clear();
+        let ids: Vec<_> = self
+            .config
+            .hotkeys
+            .hotkeys
+            .iter()
+            .map(|hotkey| hotkey.id.clone())
+            .collect();
+        for id in ids {
+            self.initialize_hotkey_drafts(&id);
         }
         self.refresh_hotkey_registration();
-        cosmic::app::Task::none()
+        self.status_message = status.into();
     }
 
     pub(super) fn add_profile_hotkey(&mut self, profile_name: String) {
@@ -636,15 +735,15 @@ mod tests {
             ..Default::default()
         };
 
-        toggle_action_monitor(&mut action, &[1, 2], 1, false);
+        toggle_action_monitor(&mut action, &[1.into(), 2.into()], 1.into(), false);
         assert!(!action.all_monitors);
-        assert_eq!(action.monitors, vec![2]);
+        assert_eq!(action.monitors, vec![2.into()]);
         assert_eq!(action.monitor_inputs.len(), 1);
-        assert_eq!(action.monitor_inputs[0].monitor_id, 2);
+        assert_eq!(action.monitor_inputs[0].monitor_id, 2.into());
 
         action.monitor_inputs[0].input_source = InputSource::Dp1;
-        toggle_action_monitor(&mut action, &[1, 2], 1, true);
-        assert!(action_master_selected(&action, &[1, 2]));
+        toggle_action_monitor(&mut action, &[1.into(), 2.into()], 1.into(), true);
+        assert!(action_master_selected(&action, &[1.into(), 2.into()]));
         assert!(!action.all_monitors);
         assert_eq!(action.monitor_inputs[0].input_source, InputSource::Dp1);
     }
@@ -655,18 +754,18 @@ mod tests {
             action_type: ActionType::Off,
             target: ActionTarget::InputSource,
             all_monitors: false,
-            monitors: vec![7],
+            monitors: vec![7.into()],
             monitor_inputs: vec![MonitorInput {
-                monitor_id: 8,
+                monitor_id: 8.into(),
                 input_source: InputSource::Dp1,
             }],
             ..Default::default()
         };
         assert!(!action_master_selected(&action, &[]));
-        assert_eq!(explicit_monitor_ids(&action), vec![7]);
+        assert_eq!(explicit_monitor_ids(&action), vec![7.into()]);
 
-        toggle_action_monitor(&mut action, &[7], 7, true);
-        assert_eq!(action.monitors, vec![7]);
+        toggle_action_monitor(&mut action, &[7.into()], 7.into(), true);
+        assert_eq!(action.monitors, vec![7.into()]);
     }
 
     #[test]
@@ -680,7 +779,7 @@ mod tests {
                 action_type: ActionType::Offset,
                 target: ActionTarget::Contrast,
                 all_monitors: false,
-                monitors: vec![3],
+                monitors: vec![3.into()],
                 value: -17,
                 ..Default::default()
             }],
@@ -690,7 +789,7 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].target, ActionTarget::Contrast);
         assert_eq!(actions[0].value, -17);
-        assert_eq!(actions[0].monitors, vec![3]);
+        assert_eq!(actions[0].monitors, vec![3.into()]);
         assert!(resolve_triggered_actions(false, false, &action_map, id).is_none());
         assert!(resolve_triggered_actions(true, true, &action_map, id).is_none());
         assert!(resolve_triggered_actions(true, false, &action_map, 999).is_none());

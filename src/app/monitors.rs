@@ -1,60 +1,31 @@
+use super::debounce::{DebounceToken, SliderFeature};
 use super::{AppModel, Message, Page};
-use crate::ddc::{self, InputSource, MonitorInfo, MonitorState};
+use crate::ddc::{InputSource, MonitorInfo, MonitorKey, MonitorState};
 use cosmic::Application;
 use cosmic::widget::nav_bar;
 
+fn mark_monitor_read_failed(monitors: &mut [MonitorState], key: &MonitorKey, error: &str) {
+    if let Some(monitor) = monitors.iter_mut().find(|monitor| &monitor.info.key == key) {
+        monitor.brightness_read_error = Some(error.to_owned());
+        monitor.contrast_read_error = Some(error.to_owned());
+        monitor.input_source_read_error = Some(error.to_owned());
+    }
+}
+
 impl AppModel {
     pub(super) fn refresh_monitors(&mut self) -> cosmic::app::Task<Message> {
-        self.monitor_generation = self.monitor_generation.wrapping_add(1);
-        let generation = self.monitor_generation;
-        self.status_message = "Detecting monitors...".into();
-        cosmic::app::Task::perform(
-            async { tokio::task::spawn_blocking(ddc::detect_monitors).await },
-            move |result| match result {
-                Ok(Ok(monitors)) => {
-                    cosmic::Action::App(Message::MonitorsDetected(generation, monitors))
-                }
-                Ok(Err(e)) => {
-                    cosmic::Action::App(Message::Error(format!("DDC detection error: {e}")))
-                }
-                Err(e) => cosmic::Action::App(Message::Error(format!("Task join error: {e}"))),
-            },
-        )
+        self.action_executor.refresh();
+        self.sync_hardware_generation();
+        self.status_message = "Detecting monitors (waiting drafts and jobs canceled)...".into();
+        self.start_next_hardware_job()
     }
 
     pub(super) fn retry_monitor(&mut self, monitor_id: u32) -> cosmic::app::Task<Message> {
-        let Some(info) = self
-            .detected_monitors
-            .iter()
-            .find(|monitor| monitor.id == monitor_id)
-            .cloned()
-        else {
+        if !self.action_executor.retry(monitor_id) {
             return self.update(Message::RefreshMonitors);
-        };
-        self.monitor_load_errors.remove(&monitor_id);
-        let generation = self.monitor_generation;
-        cosmic::app::Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || ddc::read_monitor_state(monitor_id, info)).await
-            },
-            move |result| match result {
-                Ok(Ok(state)) => cosmic::Action::App(Message::MonitorStateLoaded(
-                    generation,
-                    monitor_id,
-                    Box::new(state),
-                )),
-                Ok(Err(error)) => cosmic::Action::App(Message::MonitorStateFailed(
-                    generation,
-                    monitor_id,
-                    error.to_string(),
-                )),
-                Err(error) => cosmic::Action::App(Message::MonitorStateFailed(
-                    generation,
-                    monitor_id,
-                    format!("Task join error: {error}"),
-                )),
-            },
-        )
+        }
+        // Keep the previous error visible until a serialized read succeeds.
+        self.start_next_hardware_job()
     }
 
     pub(super) fn monitors_detected(
@@ -65,6 +36,9 @@ impl AppModel {
         if generation != self.monitor_generation {
             return cosmic::app::Task::none();
         }
+        // Also discard edits made while detection was in progress: IDs may now
+        // refer to different monitors. Invalidation never resets draft revisions.
+        self.slider_debounce.invalidate();
         self.detected_monitors = infos.clone();
         self.monitors.clear();
         self.monitor_load_errors.clear();
@@ -102,48 +76,29 @@ impl AppModel {
 
         self.status_message = format!("{} monitor(s) detected", infos.len());
 
-        // Kick off state reads for each monitor
-        let mut tasks = Vec::new();
-        for info in infos {
-            let mid = info.id;
-            tasks.push(cosmic::app::Task::perform(
-                async move {
-                    tokio::task::spawn_blocking(move || ddc::read_monitor_state(mid, info)).await
-                },
-                move |result| match result {
-                    Ok(Ok(state)) => cosmic::Action::App(Message::MonitorStateLoaded(
-                        generation,
-                        mid,
-                        Box::new(state),
-                    )),
-                    Ok(Err(e)) => cosmic::Action::App(Message::MonitorStateFailed(
-                        generation,
-                        mid,
-                        e.to_string(),
-                    )),
-                    Err(e) => cosmic::Action::App(Message::MonitorStateFailed(
-                        generation,
-                        mid,
-                        format!("Task join error: {e}"),
-                    )),
-                },
-            ));
-        }
-        cosmic::app::Task::batch(tasks)
+        // Initial reads were inserted into the FIFO by the coordinator.
+        cosmic::app::Task::none()
     }
 
     pub(super) fn monitor_state_loaded(
         &mut self,
         generation: u64,
-        id: u32,
-        state: Box<MonitorState>,
+        key: MonitorKey,
+        mut state: Box<MonitorState>,
     ) -> cosmic::app::Task<Message> {
         if generation != self.monitor_generation {
             return cosmic::app::Task::none();
         }
-        self.monitor_load_errors.remove(&id);
+        let Some(info) = self.detected_monitors.iter().find(|m| m.key == key) else {
+            return cosmic::app::Task::none();
+        };
+        if state.info.key != key {
+            return cosmic::app::Task::none();
+        }
+        state.info = info.clone();
+        self.monitor_load_errors.remove(&info.id);
         // Upsert
-        if let Some(existing) = self.monitors.iter_mut().find(|m| m.info.id == id) {
+        if let Some(existing) = self.monitors.iter_mut().find(|m| m.info.key == key) {
             *existing = *state;
         } else {
             self.monitors.push(*state);
@@ -155,12 +110,17 @@ impl AppModel {
     pub(super) fn monitor_state_failed(
         &mut self,
         generation: u64,
-        id: u32,
+        key: MonitorKey,
         error: String,
     ) -> cosmic::app::Task<Message> {
         if generation != self.monitor_generation {
             return cosmic::app::Task::none();
         }
+        let Some(info) = self.detected_monitors.iter().find(|m| m.key == key) else {
+            return cosmic::app::Task::none();
+        };
+        let id = info.id;
+        mark_monitor_read_failed(&mut self.monitors, &key, &error);
         self.monitor_load_errors.insert(id, error.clone());
         self.status_message = format!("Could not read monitor {id}: {error}");
         cosmic::app::Task::none()
@@ -171,34 +131,37 @@ impl AppModel {
         monitor_id: u32,
         value: u16,
     ) -> cosmic::app::Task<Message> {
-        // Update UI immediately for smooth feedback
-        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-            m.brightness = value;
+        if !self.action_executor.accepts_monitor(monitor_id) {
+            return cosmic::app::Task::none();
         }
-        // Store pending change and debounce
-        self.pending_brightness = Some((monitor_id, value));
+        let token = self.slider_debounce.record(
+            self.monitor_generation,
+            monitor_id,
+            SliderFeature::Brightness,
+            value,
+        );
 
-        // Schedule debounced application after 150ms
         cosmic::app::Task::perform(
             async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-                (monitor_id, value)
+                token
             },
-            move |(mid, val)| cosmic::Action::App(Message::ApplyBrightnessDebounced(mid, val)),
+            move |token| cosmic::Action::App(Message::ApplyBrightnessDebounced(monitor_id, token)),
         )
     }
 
     pub(super) fn apply_brightness_debounced(
         &mut self,
         monitor_id: u32,
-        value: u16,
+        token: DebounceToken,
     ) -> cosmic::app::Task<Message> {
-        // Only apply if this is still the pending value
-        if let Some((pending_id, pending_val)) = self.pending_brightness {
-            if pending_id == monitor_id && pending_val == value {
-                self.pending_brightness = None;
-                return self.update(Message::SetBrightness(monitor_id, value));
-            }
+        if let Some(value) = self.slider_debounce.take_current(
+            self.monitor_generation,
+            monitor_id,
+            SliderFeature::Brightness,
+            token,
+        ) {
+            return self.update(Message::SetBrightness(monitor_id, value));
         }
         cosmic::app::Task::none()
     }
@@ -208,9 +171,6 @@ impl AppModel {
         monitor_id: u32,
         value: u16,
     ) -> cosmic::app::Task<Message> {
-        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-            m.brightness = value;
-        }
         self.enqueue_hardware_jobs([super::HardwareJob::SetBrightness { monitor_id, value }])
     }
 
@@ -219,34 +179,37 @@ impl AppModel {
         monitor_id: u32,
         value: u16,
     ) -> cosmic::app::Task<Message> {
-        // Update UI immediately for smooth feedback
-        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-            m.contrast = value;
+        if !self.action_executor.accepts_monitor(monitor_id) {
+            return cosmic::app::Task::none();
         }
-        // Store pending change and debounce
-        self.pending_contrast = Some((monitor_id, value));
+        let token = self.slider_debounce.record(
+            self.monitor_generation,
+            monitor_id,
+            SliderFeature::Contrast,
+            value,
+        );
 
-        // Schedule debounced application after 150ms
         cosmic::app::Task::perform(
             async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-                (monitor_id, value)
+                token
             },
-            move |(mid, val)| cosmic::Action::App(Message::ApplyContrastDebounced(mid, val)),
+            move |token| cosmic::Action::App(Message::ApplyContrastDebounced(monitor_id, token)),
         )
     }
 
     pub(super) fn apply_contrast_debounced(
         &mut self,
         monitor_id: u32,
-        value: u16,
+        token: DebounceToken,
     ) -> cosmic::app::Task<Message> {
-        // Only apply if this is still the pending value
-        if let Some((pending_id, pending_val)) = self.pending_contrast {
-            if pending_id == monitor_id && pending_val == value {
-                self.pending_contrast = None;
-                return self.update(Message::SetContrast(monitor_id, value));
-            }
+        if let Some(value) = self.slider_debounce.take_current(
+            self.monitor_generation,
+            monitor_id,
+            SliderFeature::Contrast,
+            token,
+        ) {
+            return self.update(Message::SetContrast(monitor_id, value));
         }
         cosmic::app::Task::none()
     }
@@ -256,9 +219,6 @@ impl AppModel {
         monitor_id: u32,
         value: u16,
     ) -> cosmic::app::Task<Message> {
-        if let Some(m) = self.monitors.iter_mut().find(|m| m.info.id == monitor_id) {
-            m.contrast = value;
-        }
         self.enqueue_hardware_jobs([super::HardwareJob::SetContrast { monitor_id, value }])
     }
 
@@ -278,13 +238,54 @@ impl AppModel {
         monitor_id: u32,
         source: InputSource,
     ) -> cosmic::app::Task<Message> {
-        if let Some(monitor) = self
-            .monitors
-            .iter_mut()
-            .find(|monitor| monitor.info.id == monitor_id)
-        {
-            monitor.input_source = source;
-        }
         self.enqueue_hardware_jobs([super::HardwareJob::SetInputSource { monitor_id, source }])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::views::{PendingValue, input_presentation, scalar_presentation};
+    use crate::ddc::tests::monitor_state;
+
+    #[test]
+    fn whole_read_failure_marks_only_the_affected_monitor_unknown() {
+        let mut monitors = [monitor_state(), monitor_state()];
+        monitors[1].info.id = 2;
+        monitors[1].info.key = crate::ddc::tests::key(2);
+        mark_monitor_read_failed(
+            &mut monitors,
+            &crate::ddc::tests::key(1),
+            "monitor disconnected",
+        );
+        let monitor = &monitors[0];
+        for (value, maximum, error) in [
+            (
+                monitor.brightness,
+                monitor.brightness_max,
+                monitor.brightness_read_error.as_deref(),
+            ),
+            (
+                monitor.contrast,
+                monitor.contrast_max,
+                monitor.contrast_read_error.as_deref(),
+            ),
+        ] {
+            let presentation = scalar_presentation(value, maximum, error, PendingValue::None);
+            assert_eq!(presentation.value, None);
+            assert_eq!(presentation.label, "Unknown");
+            assert_eq!(presentation.read_error, Some("monitor disconnected"));
+        }
+        let input = input_presentation(
+            monitor.input_source,
+            monitor.input_source_read_error.as_deref(),
+            PendingValue::None,
+        );
+        assert_eq!(input.value, None);
+        assert_eq!(input.label, "Unknown");
+        assert_eq!(input.read_error, Some("monitor disconnected"));
+        assert!(monitors[1].brightness_read_error.is_none());
+        assert!(monitors[1].contrast_read_error.is_none());
+        assert!(monitors[1].input_source_read_error.is_none());
     }
 }

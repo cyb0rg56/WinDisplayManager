@@ -1,4 +1,6 @@
 mod actions;
+mod coordination;
+mod debounce;
 mod hardware_queue;
 mod hotkey_editor;
 mod hotkey_views;
@@ -6,11 +8,17 @@ mod monitors;
 mod profile_handlers;
 mod views;
 
-use self::actions::{ActionExecutor, HardwareJob, HardwareOutcome};
-use self::hotkey_editor::explicit_monitor_ids;
-use crate::config::{ActionTarget, ActionType, AppConfig, HotkeyActionSpec, TurnOffBehavior};
-use crate::ddc::{InputSource, MonitorInfo, MonitorState, PowerMode};
+use self::actions::HardwareJob;
+use self::coordination::{HardwareCoordinator, HardwareResult};
+use self::debounce::{DebounceToken, SliderDebounce};
+
+use crate::config::{
+    ActionTarget, ActionType, AppConfig, ConfigStore, HotkeyActionSpec, MonitorTarget,
+    TurnOffBehavior,
+};
+use crate::ddc::{InputSource, MonitorInfo, MonitorKey, MonitorState, PowerMode};
 use crate::hotkeys::{self, HotkeyManager};
+use crate::persistence::LoadOutcome;
 use crate::tray::{SystemTray, TrayMessage, TrayStream};
 use cosmic::iced::event::{self, Event};
 use cosmic::iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
@@ -29,7 +37,7 @@ use std::sync::Arc;
 const APP_ICON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 320 280">
   <!-- Monitor -->
   <path d="M 365.047 120.547 L 158.791 120.547 C 143.497 120.554 131.102 132.953 131.101 148.247 L 131.101 276.344 C 131.102 291.636 143.498 304.033 158.791 304.034 L 229.066 304.034 L 229.066 326.233 L 197.294 326.233 C 189.148 326.233 184.056 335.051 188.129 342.106 C 190.02 345.38 193.513 347.397 197.294 347.397 L 326.547 347.397 C 334.693 347.397 339.784 338.579 335.711 331.524 C 333.821 328.25 330.327 326.233 326.547 326.233 L 294.771 326.233 L 294.771 304.035 L 365.046 304.035 C 380.342 304.038 392.744 291.64 392.746 276.344 L 392.746 148.242 C 392.742 132.946 380.342 120.548 365.046 120.547 L 365.047 120.547 Z M 368.507 276.34 C 368.502 278.25 366.956 279.797 365.047 279.804 L 158.791 279.804 C 156.881 279.798 155.336 278.249 155.336 276.34 L 155.336 148.242 C 155.337 146.334 156.883 144.789 158.791 144.788 L 365.047 144.788 C 366.954 144.79 368.501 146.334 368.507 148.242 L 368.507 276.34 Z" data-name="Monitor" style=""></path>
-  
+
   <!-- Centered Lightning Bolt -->
   <path transform="translate(5, -10)" d="M 271 190 L 248.371 190 L 236.157 224.479 C 236.124 224.577 236.197 224.676 236.306 224.681 L 250.319 224.681 C 250.433 224.676 250.517 224.78 250.484 224.882 L 239.64 255.276 C 239.438 255.842 239.967 256.398 240.589 256.277 C 240.792 256.238 240.97 256.13 241.092 255.972 L 273.806 213.863 C 273.882 213.769 273.82 213.631 273.692 213.617 C 273.688 213.617 273.681 213.616 273.674 213.616 L 258.968 213.616 C 258.847 213.603 258.775 213.489 258.819 213.384 L 271.149 190.17 C 271.157 190.085 271.091 190.009 271 190 Z" style="fill: rgb(255, 221, 0);"></path>
 </svg>"#;
@@ -56,19 +64,17 @@ pub enum Message {
     // Monitor controls
     RefreshMonitors,
     RetryMonitor(u32),
-    MonitorsDetected(u64, Vec<MonitorInfo>),
-    MonitorStateLoaded(u64, u32, Box<MonitorState>),
-    MonitorStateFailed(u64, u32, String),
+
     SetBrightness(u32, u16),
     SetContrast(u32, u16),
     SelectInputSource(u32, usize), // monitor_id, index into INPUT_SOURCES
     SetInputSource(u32, InputSource),
-    HardwareJobFinished(Result<HardwareOutcome, String>),
+    HardwareJobFinished(u64, Result<HardwareResult, String>),
     // Debounced slider changes
     BrightnessSliderChanged(u32, u16),
     ContrastSliderChanged(u32, u16),
-    ApplyBrightnessDebounced(u32, u16),
-    ApplyContrastDebounced(u32, u16),
+    ApplyBrightnessDebounced(u32, DebounceToken),
+    ApplyContrastDebounced(u32, DebounceToken),
     // Hotkeys
     HotkeyTriggered(u32),
     ToggleHotkeys(bool),
@@ -86,13 +92,20 @@ pub enum Message {
     ActionValueDraftChanged(String, usize, String),
     ActionVcpDraftChanged(String, usize, String),
     SetActionInputSource(String, usize, InputSource),
-    SetMonitorInput(String, usize, u32, Option<InputSource>),
+    SetMonitorInput(String, usize, MonitorTarget, Option<InputSource>),
     SetActionPowerMode(String, usize, PowerMode),
     SetActionProfile(String, usize, String),
     ToggleActionAllMonitors(String, usize, bool),
-    ToggleActionMonitor(String, usize, u32, bool),
+    ToggleActionMonitor(String, usize, MonitorTarget, bool),
+    RebindMonitorTarget(String, usize, MonitorTarget, MonitorKey),
+    RemoveMonitorTarget(String, usize, MonitorTarget),
     SetTurnOffBehavior(TurnOffBehavior),
     SaveConfig,
+    RetryConfig,
+    RecoverConfigBackup,
+    RequestResetConfig,
+    CancelResetConfig,
+    ConfirmResetConfig,
     // Profiles
     RefreshProfiles,
     ProfilesListed(Vec<String>),
@@ -137,6 +150,8 @@ pub struct AppModel {
     monitors: Vec<MonitorState>,
     monitor_load_errors: HashMap<u32, String>,
     config: AppConfig,
+    config_store: ConfigStore,
+    pending_config_reset: bool,
     hotkey_manager: Option<HotkeyManager>,
     hotkey_action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
     hotkey_status: HashMap<String, bool>,
@@ -148,15 +163,12 @@ pub struct AppModel {
     vcp_drafts: HashMap<(String, usize), String>,
     config_dirty: bool,
     about: widget::about::About,
-    // Debounce state for sliders
-    pending_brightness: Option<(u32, u16)>,
-    pending_contrast: Option<(u32, u16)>,
+    slider_debounce: SliderDebounce,
     profiles: Vec<String>,
     profile_name_input: String,
     pending_profile_delete: Option<String>,
     pending_profile_replace: Option<String>,
-    action_executor: ActionExecutor<HardwareJob>,
-    refresh_monitors_after_jobs: bool,
+    action_executor: HardwareCoordinator,
     refresh_profiles_after_jobs: bool,
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
@@ -204,7 +216,15 @@ impl cosmic::Application for AppModel {
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, cosmic::app::Task<Self::Message>) {
         // Load persistent config
-        let config = AppConfig::load();
+        let (config_store, outcome) = ConfigStore::open(AppConfig::config_path());
+        let config = match outcome {
+            LoadOutcome::Missing => AppConfig::default(),
+            LoadOutcome::Loaded(config) => config,
+            LoadOutcome::Failed(error) => {
+                log::error!("Configuration requires recovery: {error}");
+                AppConfig::recovery_placeholder()
+            }
+        };
 
         // Set up hotkey manager
         let hotkey_manager = HotkeyManager::new(&config);
@@ -262,6 +282,8 @@ impl cosmic::Application for AppModel {
             monitors: Vec::new(),
             monitor_load_errors: HashMap::new(),
             config,
+            config_store,
+            pending_config_reset: false,
             hotkey_manager,
             hotkey_action_map,
             hotkey_status,
@@ -273,14 +295,12 @@ impl cosmic::Application for AppModel {
             vcp_drafts,
             config_dirty: false,
             about,
-            pending_brightness: None,
-            pending_contrast: None,
+            slider_debounce: SliderDebounce::default(),
             profiles: Vec::new(),
             profile_name_input: String::new(),
             pending_profile_delete: None,
             pending_profile_replace: None,
-            action_executor: ActionExecutor::default(),
-            refresh_monitors_after_jobs: false,
+            action_executor: HardwareCoordinator::default(),
             refresh_profiles_after_jobs: false,
             tray,
         };
@@ -368,26 +388,53 @@ impl cosmic::Application for AppModel {
     // -----------------------------------------------------------------------
 
     fn update(&mut self, message: Self::Message) -> cosmic::app::Task<Self::Message> {
+        // The store also guards saves; this gate prevents editing or executing
+        // placeholder settings while a failed load awaits the user's decision.
+        if self.config_store.recovery_error().is_some()
+            && matches!(
+                message,
+                Message::HotkeyTriggered(_)
+                    | Message::ToggleHotkeys(_)
+                    | Message::SaveConfig
+                    | Message::AddHotkey
+                    | Message::DeleteHotkey(_)
+                    | Message::StartRecording(_)
+                    | Message::ClearBinding(_)
+                    | Message::KeyPressed(_, _)
+                    | Message::AddAction(_)
+                    | Message::DeleteAction(_, _)
+                    | Message::SetActionType(_, _, _)
+                    | Message::SetActionTarget(_, _, _)
+                    | Message::ActionValueDraftChanged(_, _, _)
+                    | Message::ActionVcpDraftChanged(_, _, _)
+                    | Message::SetActionInputSource(_, _, _)
+                    | Message::SetMonitorInput(_, _, _, _)
+                    | Message::SetActionPowerMode(_, _, _)
+                    | Message::SetActionProfile(_, _, _)
+                    | Message::ToggleActionAllMonitors(_, _, _)
+                    | Message::ToggleActionMonitor(_, _, _, _)
+                    | Message::RebindMonitorTarget(_, _, _, _)
+                    | Message::RemoveMonitorTarget(_, _, _)
+                    | Message::SetTurnOffBehavior(_)
+                    | Message::AddProfileHotkey(_)
+            )
+        {
+            self.status_message =
+                "Configuration is read-only until you retry, recover a backup, or confirm a reset."
+                    .into();
+            return cosmic::app::Task::none();
+        }
         match message {
             // -- Monitor detection ------------------------------------------
             Message::RefreshMonitors => return self.refresh_monitors(),
             Message::RetryMonitor(monitor_id) => return self.retry_monitor(monitor_id),
-            Message::MonitorsDetected(generation, infos) => {
-                return self.monitors_detected(generation, infos);
-            }
-            Message::MonitorStateLoaded(generation, id, state) => {
-                return self.monitor_state_loaded(generation, id, state);
-            }
-            Message::MonitorStateFailed(generation, id, error) => {
-                return self.monitor_state_failed(generation, id, error);
-            }
 
             // -- Brightness -------------------------------------------------
             Message::BrightnessSliderChanged(monitor_id, value) => {
                 return self.brightness_slider_changed(monitor_id, value);
             }
-            Message::ApplyBrightnessDebounced(monitor_id, value) => {
-                return self.apply_brightness_debounced(monitor_id, value);
+            Message::ApplyBrightnessDebounced(monitor_id, token) => {
+                return self.apply_brightness_debounced(monitor_id, token);
             }
             Message::SetBrightness(monitor_id, value) => {
                 return self.set_brightness(monitor_id, value);
@@ -397,8 +444,8 @@ impl cosmic::Application for AppModel {
             Message::ContrastSliderChanged(monitor_id, value) => {
                 return self.contrast_slider_changed(monitor_id, value);
             }
-            Message::ApplyContrastDebounced(monitor_id, value) => {
-                return self.apply_contrast_debounced(monitor_id, value);
+            Message::ApplyContrastDebounced(monitor_id, token) => {
+                return self.apply_contrast_debounced(monitor_id, token);
             }
             Message::SetContrast(monitor_id, value) => return self.set_contrast(monitor_id, value),
 
@@ -410,7 +457,15 @@ impl cosmic::Application for AppModel {
                 return self.set_input_source(monitor_id, source);
             }
 
-            Message::HardwareJobFinished(result) => return self.hardware_job_finished(result),
+            Message::HardwareJobFinished(id, result) => {
+                return self.hardware_job_finished(id, result);
+            }
+            Message::RebindMonitorTarget(id, idx, old, key) => {
+                self.rebind_monitor_target(id, idx, old, key)
+            }
+            Message::RemoveMonitorTarget(id, idx, target) => {
+                self.remove_monitor_target(id, idx, target)
+            }
 
             // -- Hotkey actions ---------------------------------------------
             Message::HotkeyTriggered(id) => return self.handle_hotkey_triggered(id),
@@ -456,6 +511,13 @@ impl cosmic::Application for AppModel {
 
             Message::SaveConfig => return self.save_config(),
             Message::ToggleHotkeys(enabled) => return self.toggle_hotkeys(enabled),
+            Message::RetryConfig => self.retry_config(),
+            Message::RecoverConfigBackup => self.recover_config_backup(),
+            Message::RequestResetConfig => {
+                self.pending_config_reset = self.config_store.recovery_error().is_some();
+            }
+            Message::CancelResetConfig => self.pending_config_reset = false,
+            Message::ConfirmResetConfig => self.confirm_reset_config(),
 
             // -- Profiles ---------------------------------------------------
             Message::RefreshProfiles => return self.refresh_profiles(),
@@ -513,7 +575,9 @@ impl cosmic::Application for AppModel {
                         return self.update(Message::Tray(TrayMessage::ShowWindow));
                     }
                     TrayMessage::TurnOffMonitors => {
-                        return self.enqueue_hardware_jobs([HardwareJob::SoftTurnOff]);
+                        return self.enqueue_hardware_jobs([HardwareJob::SoftTurnOff {
+                            monitor_ids: self.detected_monitors.iter().map(|m| m.id).collect(),
+                        }]);
                     }
                     TrayMessage::Exit => {
                         log::info!("Tray: Exit requested");
@@ -567,8 +631,15 @@ impl cosmic::Application for AppModel {
         // Wrap in a container with status bar at the bottom
         let status_bar = widget::text::caption(&self.status_message);
 
-        let layout = widget::column::with_capacity(3)
-            .push(content)
+        let mut layout = widget::column::with_capacity(4);
+        let recovering = self.config_store.recovery_error().is_some();
+        if recovering {
+            layout = layout.push(self.view_config_recovery());
+        }
+        if !recovering || !matches!(page, Page::Hotkeys | Page::Settings) {
+            layout = layout.push(content);
+        }
+        let layout = layout
             .push(widget::divider::horizontal::default())
             .push(
                 widget::container(status_bar)
@@ -614,152 +685,18 @@ impl AppModel {
         })
     }
 
-    fn resolve_monitors(&self, action: &HotkeyActionSpec) -> Vec<u32> {
-        if action.all_monitors {
-            self.detected_monitors
-                .iter()
-                .map(|monitor| monitor.id)
-                .collect()
-        } else {
-            explicit_monitor_ids(action)
-        }
-    }
-
-    fn turn_off_jobs(&self, monitor_ids: &[u32]) -> Vec<HardwareJob> {
-        let mut jobs = Vec::new();
-        if self.config.turn_off_behavior.uses_soft() {
-            jobs.push(HardwareJob::SoftTurnOff);
-        }
-        if self.config.turn_off_behavior.uses_ddc() {
-            for &monitor_id in monitor_ids {
-                jobs.push(HardwareJob::SetPowerMode {
-                    monitor_id,
-                    mode: PowerMode::Off,
-                });
-            }
-        }
-        jobs
-    }
-
     fn handle_hotkey_actions(
         &mut self,
         actions: Vec<HotkeyActionSpec>,
     ) -> cosmic::app::Task<Message> {
-        let mut jobs = Vec::new();
-        for action in actions {
-            if action.action_type == ActionType::Off {
-                jobs.extend(self.turn_off_jobs(&self.resolve_monitors(&action)));
-                continue;
-            }
-            if action.target == ActionTarget::Profile {
-                jobs.push(HardwareJob::ApplyProfile {
-                    name: action.profile_name,
-                });
-                continue;
-            }
-            let monitor_ids = self.resolve_monitors(&action);
-            match action.target {
-                ActionTarget::Brightness => {
-                    for monitor_id in monitor_ids {
-                        match action.action_type {
-                            ActionType::Set => {
-                                let maximum = self
-                                    .monitors
-                                    .iter()
-                                    .find(|monitor| monitor.info.id == monitor_id)
-                                    .map(|monitor| monitor.brightness_max)
-                                    .unwrap_or(100);
-                                jobs.push(HardwareJob::SetBrightness {
-                                    monitor_id,
-                                    value: action.value.clamp(0, i32::from(maximum)) as u16,
-                                });
-                            }
-                            ActionType::Offset => jobs.push(HardwareJob::OffsetBrightness {
-                                monitor_id,
-                                offset: action.value,
-                            }),
-                            ActionType::Off => unreachable!(),
-                        }
-                    }
-                }
-                ActionTarget::Contrast => {
-                    for monitor_id in monitor_ids {
-                        match action.action_type {
-                            ActionType::Set => {
-                                let maximum = self
-                                    .monitors
-                                    .iter()
-                                    .find(|monitor| monitor.info.id == monitor_id)
-                                    .map(|monitor| monitor.contrast_max)
-                                    .unwrap_or(100);
-                                jobs.push(HardwareJob::SetContrast {
-                                    monitor_id,
-                                    value: action.value.clamp(0, i32::from(maximum)) as u16,
-                                });
-                            }
-                            ActionType::Offset => jobs.push(HardwareJob::OffsetContrast {
-                                monitor_id,
-                                offset: action.value,
-                            }),
-                            ActionType::Off => unreachable!(),
-                        }
-                    }
-                }
-                ActionTarget::InputSource => {
-                    let inputs: Vec<(u32, InputSource)> = if action.all_monitors {
-                        monitor_ids
-                            .into_iter()
-                            .map(|id| (id, action.input_source))
-                            .collect()
-                    } else if action.monitor_inputs.is_empty() {
-                        action
-                            .monitors
-                            .iter()
-                            .map(|id| (*id, action.input_source))
-                            .collect()
-                    } else {
-                        action
-                            .monitor_inputs
-                            .iter()
-                            .map(|input| (input.monitor_id, input.input_source))
-                            .collect()
-                    };
-                    for (monitor_id, input_source) in inputs {
-                        jobs.push(HardwareJob::SetInputSource {
-                            monitor_id,
-                            source: input_source,
-                        });
-                    }
-                }
-                ActionTarget::PowerMode => {
-                    for monitor_id in monitor_ids {
-                        jobs.push(HardwareJob::SetPowerMode {
-                            monitor_id,
-                            mode: action.power_mode,
-                        });
-                    }
-                }
-                ActionTarget::CustomVcp => {
-                    for monitor_id in monitor_ids {
-                        match action.action_type {
-                            ActionType::Set => jobs.push(HardwareJob::SetCustomVcp {
-                                monitor_id,
-                                code: action.vcp_code,
-                                value: action.value.clamp(0, i32::from(u16::MAX)) as u16,
-                            }),
-                            ActionType::Offset => jobs.push(HardwareJob::OffsetCustomVcp {
-                                monitor_id,
-                                code: action.vcp_code,
-                                offset: action.value,
-                            }),
-                            ActionType::Off => unreachable!(),
-                        }
-                    }
-                }
-                ActionTarget::Profile => unreachable!(),
-            }
+        if let Err(error) = self
+            .action_executor
+            .enqueue_actions(actions, self.config.turn_off_behavior)
+        {
+            self.status_message = format!("Hotkey not dispatched: {error}");
+            return cosmic::app::Task::none();
         }
-        self.enqueue_hardware_jobs(jobs)
+        self.start_next_hardware_job()
     }
 
     // -----------------------------------------------------------------------

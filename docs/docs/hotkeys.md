@@ -76,6 +76,47 @@ remain visible as unavailable if that display is temporarily disconnected.
 **Apply Profile** always restores the entire saved display layout, so it does
 not show per-display switches.
 
+## Migrating monitor selections
+
+Monitor selections now store the complete Windows monitor device-interface path,
+not an enumeration number. Display numbers in the UI are labels only. Two monitors
+with the same model name remain distinct when Windows gives them distinct paths.
+
+Old numeric selections load as **Legacy monitor N (rebind required)** and are
+preserved on save. They are never assigned automatically to today's Monitor N.
+In each action's Displays section, choose **Rebind to Monitor …** or **Remove**
+for each unresolved entry, then save. Rebinding retains that entry's input-source
+choice. If the destination already has an assignment, remove that assignment
+first; it is not silently overwritten. Disconnected saved selections can also
+be rebound or removed. Selecting **All displays** explicitly uses the currently
+identified monitors instead of the saved selection.
+
+An explicit action with any unresolved, missing, or duplicate target is refused
+before dispatch, including Windows sleep. An empty selection never means all.
+The hotkey chain is validated before enqueueing. The first queued monitor
+operation (not a profile operation) checks the complete monitor selection again
+against live hardware. If this initial preflight fails, the batch's remaining
+monitor operations are blocked. After it succeeds, each later operation checks
+only its own target; Windows sleep checks its selected group. A monitor that
+intentionally disconnects after switching inputs or powering off does not block
+an operation on a different, still-connected monitor.
+
+This is not an atomic transaction: a later operation can still fail if its own
+target disappears, and earlier successful operations are not rolled back.
+Profile operations and their topology-change behavior are unchanged.
+
+Identity is scoped to a Windows device instance, not an immutable physical serial
+number. Moving a monitor to another port/dock, reinstalling a driver, or replacing
+hardware may change its path and require rebinding. The app does not guess by model
+name, position, or enumeration order. Clone/tiled configurations with multiple
+physical handles or CCD targets for one GDI source, missing identity information,
+and duplicate paths are refused; detection/control may be unavailable for the
+whole snapshot until the ambiguity is removed. Refresh after changing topology.
+
+**Soft (Windows monitor sleep)** remains a global Windows operation even after
+validating the selected targets; it cannot sleep just one selected monitor.
+Display-layout profile remapping is unchanged by this identity migration.
+
 ## Creating a hotkey
 
 1. Open the **Hotkeys** page and click **Add Hotkey**.
@@ -115,7 +156,7 @@ Each hotkey records its key combination and its list of actions (type, target,
 value, target monitors, input source(s), power mode, VCP code or profile name,
 as applicable). You normally never need to touch this file — the Hotkeys page
 manages it for you — but it's plain, human-readable JSON if you ever want to
-back it up or inspect it. Configurations from older versions are migrated
-automatically on first launch.
+back it up or inspect it. Older configuration shapes are read automatically;
+legacy numeric monitor selections require explicit rebinding as described above.
 
 {% include footer.html %}

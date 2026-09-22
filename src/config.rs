@@ -1,9 +1,10 @@
-use crate::ddc::{InputSource, PowerMode};
+use crate::ddc::{InputSource, MonitorInfo, MonitorKey, PowerMode};
+use crate::persistence::{self, LoadOutcome, SCHEMA_VERSION, WriteMode};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -149,8 +150,52 @@ impl ActionTarget {
 /// switch different monitors to different inputs from one hotkey.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MonitorInput {
-    pub monitor_id: u32,
+    pub monitor_id: MonitorTarget,
     pub input_source: InputSource,
+}
+
+/// Numbers are historical enumeration positions, never current monitor IDs.
+/// Unknown string keys remain round-trippable but cannot resolve to hardware.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MonitorTarget {
+    Stable(MonitorKey),
+    LegacyIndex(u32),
+}
+
+impl From<u32> for MonitorTarget {
+    fn from(id: u32) -> Self {
+        Self::LegacyIndex(id)
+    }
+}
+
+impl std::fmt::Display for MonitorTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stable(key) => key.fmt(f),
+            Self::LegacyIndex(id) => write!(f, "Legacy monitor {id} (rebind required)"),
+        }
+    }
+}
+
+impl MonitorTarget {
+    pub fn resolve<'a>(&self, available: &'a [MonitorInfo]) -> Result<&'a MonitorInfo, String> {
+        let Self::Stable(key) = self else {
+            return Err(format!(
+                "{self}: select Rebind or Remove in the hotkey editor"
+            ));
+        };
+        let mut matches = available
+            .iter()
+            .filter(|m| &m.key == key && key.is_supported());
+        let found = matches
+            .next()
+            .ok_or_else(|| format!("Monitor unavailable: {key}"))?;
+        if matches.next().is_some() {
+            return Err(format!("Ambiguous monitor: {key}"));
+        }
+        Ok(found)
+    }
 }
 
 /// A single step within a hotkey's action chain.
@@ -163,7 +208,7 @@ pub struct HotkeyActionSpec {
     pub all_monitors: bool,
     /// Explicit monitor ids to apply to (ignored when `all_monitors` is set).
     #[serde(default)]
-    pub monitors: Vec<u32>,
+    pub monitors: Vec<MonitorTarget>,
     /// Set = absolute value; Offset = signed delta. Used for numeric targets.
     #[serde(default)]
     pub value: i32,
@@ -185,6 +230,76 @@ pub struct HotkeyActionSpec {
     /// Used when `target == Profile`.
     #[serde(default)]
     pub profile_name: String,
+}
+
+impl HotkeyActionSpec {
+    pub fn explicit_targets(&self) -> Vec<MonitorTarget> {
+        if self.action_type != ActionType::Off
+            && self.target == ActionTarget::InputSource
+            && !self.monitor_inputs.is_empty()
+        {
+            self.monitor_inputs
+                .iter()
+                .map(|input| input.monitor_id.clone())
+                .collect()
+        } else {
+            self.monitors.clone()
+        }
+    }
+
+    /// Validate the entire active selection before any job (including SoftOff)
+    /// is queued. Duplicate assignments are rejected rather than last-wins.
+    pub fn resolve_monitors(&self, available: &[MonitorInfo]) -> Result<Vec<u32>, String> {
+        let targets = if self.all_monitors {
+            available
+                .iter()
+                .map(|m| MonitorTarget::Stable(m.key.clone()))
+                .collect()
+        } else {
+            self.explicit_targets()
+        };
+        let mut ids = Vec::new();
+        for target in targets {
+            let id = target.resolve(available)?.id;
+            if ids.contains(&id) {
+                return Err(format!("Duplicate monitor assignment: {target}"));
+            }
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            return Err("No target monitors selected or available".into());
+        }
+        Ok(ids)
+    }
+
+    pub fn rebind_target(&mut self, old: &MonitorTarget, new: MonitorKey) -> Result<(), String> {
+        let new = MonitorTarget::Stable(new);
+        if old != &new
+            && (self.monitors.contains(&new)
+                || self.monitor_inputs.iter().any(|i| i.monitor_id == new))
+        {
+            return Err(
+                "That monitor is already assigned; remove its assignment before rebinding".into(),
+            );
+        }
+        for target in &mut self.monitors {
+            if target == old {
+                *target = new.clone();
+            }
+        }
+        for input in &mut self.monitor_inputs {
+            if &input.monitor_id == old {
+                input.monitor_id = new.clone();
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_target(&mut self, target: &MonitorTarget) {
+        self.monitors.retain(|id| id != target);
+        self.monitor_inputs
+            .retain(|input| &input.monitor_id != target);
+    }
 }
 
 fn default_input_source() -> InputSource {
@@ -400,10 +515,10 @@ impl HotkeyConfig {
                     action_type: ActionType::Set,
                     target: ActionTarget::InputSource,
                     all_monitors: false,
-                    monitors: vec![b.monitor_id],
+                    monitors: vec![b.monitor_id.into()],
                     input_source: b.input_source,
                     monitor_inputs: vec![MonitorInput {
-                        monitor_id: b.monitor_id,
+                        monitor_id: b.monitor_id.into(),
                         input_source: b.input_source,
                     }],
                     ..Default::default()
@@ -423,7 +538,7 @@ impl HotkeyConfig {
                     action_type: ActionType::Offset,
                     target: ActionTarget::Brightness,
                     all_monitors: false,
-                    monitors: vec![b.monitor_id],
+                    monitors: vec![b.monitor_id.into()],
                     value,
                     ..Default::default()
                 }],
@@ -442,7 +557,7 @@ impl HotkeyConfig {
                     action_type: ActionType::Offset,
                     target: ActionTarget::Contrast,
                     all_monitors: false,
-                    monitors: vec![b.monitor_id],
+                    monitors: vec![b.monitor_id.into()],
                     value,
                     ..Default::default()
                 }],
@@ -457,7 +572,7 @@ impl HotkeyConfig {
                     action_type: ActionType::Set,
                     target: ActionTarget::PowerMode,
                     all_monitors: false,
-                    monitors: vec![b.monitor_id],
+                    monitors: vec![b.monitor_id.into()],
                     power_mode: b.power_mode,
                     ..Default::default()
                 }],
@@ -482,6 +597,9 @@ impl HotkeyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Unversioned files are schema 0 and migrate on load, without writing.
+    #[serde(default)]
+    schema_version: u32,
     pub hotkeys: HotkeyConfig,
     /// Refresh interval in seconds for polling monitor state (0 = disabled).
     pub refresh_interval_secs: u64,
@@ -500,6 +618,7 @@ fn default_hotkeys_enabled() -> bool {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            schema_version: SCHEMA_VERSION,
             hotkeys: HotkeyConfig::default(),
             refresh_interval_secs: 0,
             hotkeys_enabled: true,
@@ -519,37 +638,122 @@ impl AppConfig {
         base.join("windisplaymanager").join("config.json")
     }
 
-    /// Load configuration from disk, falling back to defaults.
-    pub fn load() -> Self {
-        let path = Self::config_path();
-        if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(contents) => match serde_json::from_str::<Self>(&contents) {
-                    Ok(mut cfg) => {
-                        cfg.hotkeys.migrate_legacy();
-                        return cfg;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse config: {e}. Using defaults.");
-                    }
-                },
-                Err(e) => {
-                    log::warn!("Failed to read config file: {e}. Using defaults.");
-                }
-            }
-        }
-        Self::default()
+    pub fn load_from(path: &Path) -> LoadOutcome<Self> {
+        persistence::load(path, Self::decode)
     }
 
-    /// Save configuration to disk.
-    pub fn save(&self) -> std::io::Result<()> {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+    fn decode(bytes: &[u8]) -> io::Result<Self> {
+        let mut config: Self = persistence::decode_json(bytes)?;
+        config.hotkeys.migrate_legacy();
+        config.schema_version = SCHEMA_VERSION;
+        Ok(config)
+    }
+
+    /// Inert runtime state, not a successful load or permission to save defaults.
+    pub fn recovery_placeholder() -> Self {
+        Self {
+            hotkeys_enabled: false,
+            ..Self::default()
         }
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        fs::write(&path, json)
+    }
+}
+
+/// The write gate survives failed loads, including subsequent removal of the
+/// bad file. Only an explicit retry, backup recovery, or confirmed reset clears it.
+#[derive(Debug)]
+pub struct ConfigStore {
+    path: PathBuf,
+    recovery_error: Option<String>,
+}
+
+impl ConfigStore {
+    pub fn open(path: PathBuf) -> (Self, LoadOutcome<AppConfig>) {
+        let mut store = Self {
+            path,
+            recovery_error: None,
+        };
+        let outcome = store.retry();
+        (store, outcome)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn recovery_error(&self) -> Option<&str> {
+        self.recovery_error.as_deref()
+    }
+
+    pub fn retry(&mut self) -> LoadOutcome<AppConfig> {
+        let outcome = AppConfig::load_from(&self.path);
+        self.recovery_error = match &outcome {
+            LoadOutcome::Failed(error) => Some(error.to_string()),
+            _ => None,
+        };
+        outcome
+    }
+
+    fn ensure_writable(&self) -> io::Result<()> {
+        if let Some(error) = &self.recovery_error {
+            return Err(io::Error::other(format!(
+                "Configuration recovery required: {error}. Retry, recover a backup, or explicitly reset first."
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn save(&mut self, config: &AppConfig) -> io::Result<()> {
+        self.ensure_writable()?;
+        let bytes = serde_json::to_vec_pretty(config).map_err(persistence::invalid_data)?;
+        let result = persistence::save_with_backup(&self.path, &bytes, WriteMode::Replace, |old| {
+            AppConfig::decode(old).map(|_| ())
+        });
+        if result.is_err() {
+            // Detect corruption or an unreadable primary that appeared since load.
+            if let LoadOutcome::Failed(error) = AppConfig::load_from(&self.path) {
+                self.recovery_error = Some(error.to_string());
+            }
+        }
+        result
+    }
+
+    pub fn set_hotkeys_enabled(&mut self, config: &mut AppConfig, enabled: bool) -> io::Result<()> {
+        self.ensure_writable()?;
+        let mut updated = config.clone();
+        updated.hotkeys_enabled = enabled;
+        self.save(&updated)?;
+        *config = updated;
+        Ok(())
+    }
+
+    pub fn recover_backup(&mut self) -> io::Result<AppConfig> {
+        let backup = persistence::backup_path(&self.path);
+        let config = match AppConfig::load_from(&backup) {
+            LoadOutcome::Loaded(config) => config,
+            LoadOutcome::Missing => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "No configuration backup exists",
+                ));
+            }
+            LoadOutcome::Failed(error) => return Err(error),
+        };
+        self.replace_for_recovery(&config)?;
+        Ok(config)
+    }
+
+    /// Call only after the user explicitly confirms discarding the primary file.
+    pub fn reset_confirmed(&mut self) -> io::Result<AppConfig> {
+        let config = AppConfig::default();
+        self.replace_for_recovery(&config)?;
+        Ok(config)
+    }
+
+    fn replace_for_recovery(&mut self, config: &AppConfig) -> io::Result<()> {
+        let bytes = serde_json::to_vec_pretty(config).map_err(persistence::invalid_data)?;
+        persistence::atomic_write(&self.path, &bytes, WriteMode::Replace)?;
+        self.recovery_error = None;
+        Ok(())
     }
 }
 
@@ -674,6 +878,272 @@ pub fn string_to_code(s: &str) -> Option<Code> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::{backup_path, tests::TestDir};
+    use std::fs;
+
+    #[test]
+    fn load_outcomes_distinguish_missing_loaded_and_io_failure() {
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        let (mut store, outcome) = ConfigStore::open(path.clone());
+        assert!(matches!(outcome, LoadOutcome::Missing));
+        assert!(!path.exists());
+        store.save(&AppConfig::default()).unwrap();
+        assert!(matches!(store.retry(), LoadOutcome::Loaded(_)));
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(matches!(store.retry(), LoadOutcome::Failed(_)));
+        assert!(store.save(&AppConfig::default()).is_err());
+        assert!(store.reset_confirmed().is_err());
+        assert!(store.recovery_error().is_some());
+        assert!(path.is_dir());
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn malformed_and_future_config_block_toggle_and_save_until_explicit_retry() {
+        let mut future = serde_json::to_value(AppConfig::default()).unwrap();
+        future["schema_version"] = serde_json::json!(SCHEMA_VERSION + 1);
+        let future = serde_json::to_vec(&future).unwrap();
+        for original in [b"{bad json".as_slice(), future.as_slice()] {
+            let dir = TestDir::new();
+            let path = dir.0.join("config.json");
+            let backup = serde_json::to_vec(&AppConfig::default()).unwrap();
+            fs::write(&path, original).unwrap();
+            fs::write(backup_path(&path), &backup).unwrap();
+            let (mut store, outcome) = ConfigStore::open(path.clone());
+            assert!(matches!(outcome, LoadOutcome::Failed(_)));
+            let mut config = AppConfig::recovery_placeholder();
+            for enabled in [true, false] {
+                assert!(store.set_hotkeys_enabled(&mut config, enabled).is_err());
+                assert!(!config.hotkeys_enabled);
+                assert!(store.save(&config).is_err());
+            }
+            assert_eq!(fs::read(&path).unwrap(), original);
+            assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+            fs::remove_file(&path).unwrap();
+            assert!(store.save(&config).is_err());
+            assert!(!path.exists());
+            assert!(matches!(store.retry(), LoadOutcome::Missing));
+            store.save(&AppConfig::default()).unwrap();
+            dir.assert_no_temps();
+        }
+    }
+
+    #[test]
+    fn corruption_after_load_also_blocks_save_and_preserves_backup() {
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        let (mut store, _) = ConfigStore::open(path.clone());
+        let mut config = AppConfig::default();
+        store.save(&config).unwrap();
+        store.set_hotkeys_enabled(&mut config, false).unwrap();
+        let backup = fs::read(backup_path(&path)).unwrap();
+        fs::write(&path, b"corrupted externally").unwrap();
+        assert!(store.set_hotkeys_enabled(&mut config, true).is_err());
+        assert!(!config.hotkeys_enabled);
+        assert!(store.recovery_error().is_some());
+        assert!(store.save(&config).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"corrupted externally");
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn explicit_backup_recovery_and_reset_keep_the_good_backup() {
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        let good = AppConfig {
+            hotkeys_enabled: false,
+            ..AppConfig::default()
+        };
+        let backup = serde_json::to_vec(&good).unwrap();
+        fs::write(&path, b"bad").unwrap();
+        fs::write(backup_path(&path), &backup).unwrap();
+        let (mut store, _) = ConfigStore::open(path.clone());
+        let recovered = store.recover_backup().unwrap();
+        assert!(!recovered.hotkeys_enabled);
+        assert!(store.recovery_error().is_none());
+        assert!(matches!(
+            AppConfig::load_from(&path),
+            LoadOutcome::Loaded(_)
+        ));
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+        fs::write(&path, br#"{"schema_version":999}"#).unwrap();
+        assert!(matches!(store.retry(), LoadOutcome::Failed(_)));
+        let reset = store.reset_confirmed().unwrap();
+        assert!(reset.hotkeys_enabled);
+        assert!(store.recovery_error().is_none());
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+        assert!(matches!(
+            AppConfig::load_from(&path),
+            LoadOutcome::Loaded(_)
+        ));
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn missing_invalid_or_future_backup_cannot_exit_recovery() {
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        fs::write(&path, b"original invalid file").unwrap();
+        let (mut store, _) = ConfigStore::open(path.clone());
+        assert!(store.recover_backup().is_err());
+        for bytes in [b"bad backup".as_slice(), br#"{"schema_version":999}"#] {
+            fs::write(backup_path(&path), bytes).unwrap();
+            assert!(store.recover_backup().is_err());
+            assert!(store.recovery_error().is_some());
+            assert_eq!(fs::read(&path).unwrap(), b"original invalid file");
+            assert_eq!(fs::read(backup_path(&path)).unwrap(), bytes);
+        }
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn stable_numeric_and_unknown_targets_roundtrip_through_schema1_store() {
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        let mut config = AppConfig::default();
+        let mut hotkey = Hotkey::new_empty();
+        let key = crate::ddc::tests::key(1);
+        let unknown: MonitorTarget = serde_json::from_str("\"future-monitor:v2:abc\"").unwrap();
+        hotkey.actions[0] = HotkeyActionSpec {
+            target: ActionTarget::InputSource,
+            all_monitors: false,
+            monitors: vec![
+                1.into(),
+                MonitorTarget::Stable(key.clone()),
+                unknown.clone(),
+            ],
+            monitor_inputs: vec![MonitorInput {
+                monitor_id: 1.into(),
+                input_source: InputSource::Hdmi2,
+            }],
+            ..Default::default()
+        };
+        config.hotkeys.hotkeys.push(hotkey);
+        let (mut store, _) = ConfigStore::open(path.clone());
+        store.save(&config).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["schema_version"], 1);
+        assert_eq!(
+            saved["hotkeys"]["hotkeys"][0]["actions"][0]["monitors"][0],
+            1
+        );
+        assert_eq!(
+            saved["hotkeys"]["hotkeys"][0]["actions"][0]["monitor_inputs"][0]["monitor_id"],
+            1
+        );
+        let LoadOutcome::Loaded(reloaded) = store.retry() else {
+            panic!("reload failed")
+        };
+        let action = &reloaded.hotkeys.hotkeys[0].actions[0];
+        assert_eq!(
+            action.monitors,
+            vec![1.into(), MonitorTarget::Stable(key), unknown]
+        );
+        assert_eq!(action.monitor_inputs[0].input_source, InputSource::Hdmi2);
+        assert!(
+            action
+                .resolve_monitors(&[crate::ddc::tests::monitor_state().info])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn explicit_rebind_preserves_input_values_and_rejects_collisions() {
+        let mut action = HotkeyActionSpec {
+            target: ActionTarget::InputSource,
+            all_monitors: false,
+            monitors: vec![1.into(), 2.into()],
+            monitor_inputs: vec![
+                MonitorInput {
+                    monitor_id: 1.into(),
+                    input_source: InputSource::Hdmi2,
+                },
+                MonitorInput {
+                    monitor_id: 2.into(),
+                    input_source: InputSource::Dp1,
+                },
+            ],
+            ..Default::default()
+        };
+        let live = crate::ddc::tests::monitor_state().info;
+        assert!(
+            action
+                .resolve_monitors(std::slice::from_ref(&live))
+                .is_err()
+        );
+        action.rebind_target(&1.into(), live.key.clone()).unwrap();
+        assert_eq!(action.monitor_inputs[0].input_source, InputSource::Hdmi2);
+        assert_eq!(action.monitors[0], MonitorTarget::Stable(live.key.clone()));
+        assert!(action.rebind_target(&2.into(), live.key.clone()).is_err());
+        assert_eq!(action.monitor_inputs[1].monitor_id, 2.into());
+        assert_eq!(action.monitor_inputs[1].input_source, InputSource::Dp1);
+        // The still-unresolved second entry blocks the entire action.
+        assert!(
+            action
+                .resolve_monitors(std::slice::from_ref(&live))
+                .is_err()
+        );
+        action.remove_target(&2.into());
+        assert_eq!(action.resolve_monitors(&[live]).unwrap(), [1]);
+        assert_eq!(action.monitor_inputs[0].input_source, InputSource::Hdmi2);
+    }
+
+    #[test]
+    fn whole_action_resolution_rejects_legacy_missing_duplicate_and_empty_targets_including_off() {
+        let live = crate::ddc::tests::monitor_state().info;
+        let stable = MonitorTarget::Stable(live.key.clone());
+        for action_type in [ActionType::Set, ActionType::Offset, ActionType::Off] {
+            for targets in [
+                vec![stable.clone(), 1.into()],
+                vec![
+                    stable.clone(),
+                    MonitorTarget::Stable(crate::ddc::tests::key(2)),
+                ],
+                vec![stable.clone(), stable.clone()],
+                Vec::new(),
+            ] {
+                let action = HotkeyActionSpec {
+                    action_type,
+                    all_monitors: false,
+                    monitors: targets,
+                    ..Default::default()
+                };
+                assert!(
+                    action
+                        .resolve_monitors(std::slice::from_ref(&live))
+                        .is_err()
+                );
+            }
+        }
+        let action = HotkeyActionSpec {
+            all_monitors: true,
+            monitors: vec![99.into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            action
+                .resolve_monitors(std::slice::from_ref(&live))
+                .unwrap(),
+            [1]
+        );
+        assert!(action.resolve_monitors(&[]).is_err());
+        assert!(action.resolve_monitors(&[live.clone(), live]).is_err());
+    }
+
+    #[test]
+    fn explicit_resolution_uses_keys_after_numbers_change() {
+        let mut live = crate::ddc::tests::monitor_state().info;
+        let action = HotkeyActionSpec {
+            all_monitors: false,
+            monitors: vec![MonitorTarget::Stable(live.key.clone())],
+            ..Default::default()
+        };
+        live.id = 27;
+        assert_eq!(action.resolve_monitors(&[live]).unwrap(), [27]);
+    }
 
     #[test]
     fn legacy_bindings_migrate_to_explicit_action_targets() {
@@ -711,30 +1181,48 @@ mod tests {
                 }
                 "#;
 
-        let mut config: AppConfig = serde_json::from_str(json).unwrap();
-        config.hotkeys.migrate_legacy();
+        let dir = TestDir::new();
+        let path = dir.0.join("config.json");
+        fs::write(&path, json).unwrap();
+        let (mut store, outcome) = ConfigStore::open(path.clone());
+        let LoadOutcome::Loaded(config) = outcome else {
+            panic!("Legacy config did not load")
+        };
+        assert_eq!(config.schema_version, SCHEMA_VERSION);
+        assert_eq!(fs::read_to_string(&path).unwrap(), json);
+        store.save(&config).unwrap();
+        assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), json);
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\"schema_version\": 1"));
+        assert!(!saved.contains("input_switch_bindings"));
+        let LoadOutcome::Loaded(reloaded) = store.retry() else {
+            panic!("Migrated config did not reload")
+        };
+        assert_eq!(reloaded.hotkeys.hotkeys.len(), 4);
+        assert_eq!(reloaded.hotkeys.hotkeys[0].id, config.hotkeys.hotkeys[0].id);
+        dir.assert_no_temps();
 
         assert_eq!(config.hotkeys.hotkeys.len(), 4);
         let input = &config.hotkeys.hotkeys[0].actions[0];
         assert!(!input.all_monitors);
-        assert_eq!(input.monitors, vec![4]);
+        assert_eq!(input.monitors, vec![4.into()]);
         assert_eq!(input.monitor_inputs.len(), 1);
-        assert_eq!(input.monitor_inputs[0].monitor_id, 4);
+        assert_eq!(input.monitor_inputs[0].monitor_id, 4.into());
         assert_eq!(input.monitor_inputs[0].input_source, InputSource::Hdmi2);
 
         let brightness = &config.hotkeys.hotkeys[1].actions[0];
         assert!(!brightness.all_monitors);
-        assert_eq!(brightness.monitors, vec![5]);
+        assert_eq!(brightness.monitors, vec![5.into()]);
         assert_eq!(brightness.value, -7);
 
         let contrast = &config.hotkeys.hotkeys[2].actions[0];
         assert!(!contrast.all_monitors);
-        assert_eq!(contrast.monitors, vec![6]);
+        assert_eq!(contrast.monitors, vec![6.into()]);
         assert_eq!(contrast.value, 9);
 
         let power = &config.hotkeys.hotkeys[3].actions[0];
         assert!(!power.all_monitors);
-        assert_eq!(power.monitors, vec![7]);
+        assert_eq!(power.monitors, vec![7.into()]);
         assert_eq!(power.power_mode, PowerMode::Off);
     }
 }

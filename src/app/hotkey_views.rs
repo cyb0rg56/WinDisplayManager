@@ -2,7 +2,7 @@ use super::hotkey_editor::{
     action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
 };
 use super::{AppModel, INPUT_SOURCES, Message, POWER_MODES, RecordingState};
-use crate::config::{ActionTarget, ActionType, Hotkey, HotkeyActionSpec};
+use crate::config::{ActionTarget, ActionType, Hotkey, HotkeyActionSpec, MonitorTarget};
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::{Alignment, Length};
@@ -313,17 +313,17 @@ impl AppModel {
             }
         }
 
-        let mut display_ids: Vec<u32> = self
+        let mut display_ids: Vec<MonitorTarget> = self
             .detected_monitors
             .iter()
-            .map(|monitor| monitor.id)
+            .map(|monitor| MonitorTarget::Stable(monitor.key.clone()))
             .collect();
-        for monitor_id in action
-            .monitors
-            .iter()
-            .copied()
-            .chain(action.monitor_inputs.iter().map(|input| input.monitor_id))
-        {
+        for monitor_id in action.monitors.iter().cloned().chain(
+            action
+                .monitor_inputs
+                .iter()
+                .map(|input| input.monitor_id.clone()),
+        ) {
             if !display_ids.contains(&monitor_id) {
                 display_ids.push(monitor_id);
             }
@@ -346,26 +346,62 @@ impl AppModel {
             );
 
             for monitor_id in display_ids {
-                let label = self
-                    .detected_monitors
-                    .iter()
-                    .find(|monitor| monitor.id == monitor_id)
-                    .filter(|monitor| !monitor.name.is_empty())
-                    .map(|monitor| monitor.name.clone())
-                    .unwrap_or_else(|| format!("Monitor {monitor_id} (unavailable)"));
-                let selected = action_monitor_selected(action, monitor_id);
-                displays = displays.push(
-                    widget::row::with_capacity(3)
+                let available = monitor_id.resolve(&self.detected_monitors).ok();
+                let label = available
+                    .map(|monitor| format!("Monitor {}: {}", monitor.id, monitor.name))
+                    .unwrap_or_else(|| format!("{monitor_id} (unresolved)"));
+                let selected = action_monitor_selected(action, &monitor_id);
+                if available.is_some() {
+                    displays = displays.push(
+                        widget::row::with_capacity(2)
+                            .push(widget::text::body(label).width(Length::Fill))
+                            .push(widget::toggler(selected).on_toggle({
+                                let id = id.clone();
+                                let target = monitor_id.clone();
+                                move |checked| {
+                                    Message::ToggleActionMonitor(
+                                        id.clone(),
+                                        idx,
+                                        target.clone(),
+                                        checked,
+                                    )
+                                }
+                            }))
+                            .align_y(Alignment::Center),
+                    );
+                } else {
+                    let labels: Vec<String> = self
+                        .detected_monitors
+                        .iter()
+                        .map(|m| format!("Rebind to Monitor {}: {}", m.id, m.name))
+                        .collect();
+                    let keys: Vec<_> = self
+                        .detected_monitors
+                        .iter()
+                        .map(|m| m.key.clone())
+                        .collect();
+                    let mut row = widget::row::with_capacity(3)
                         .push(widget::text::body(label).width(Length::Fill))
-                        .push(widget::Space::new().width(Length::Fixed(space_s as f32)))
-                        .push(widget::toggler(selected).on_toggle({
+                        .push(widget::button::standard("Remove").on_press(
+                            Message::RemoveMonitorTarget(id.clone(), idx, monitor_id.clone()),
+                        ))
+                        .spacing(space_s);
+                    if !keys.is_empty() {
+                        row = row.push(widget::dropdown(labels, None, {
                             let id = id.clone();
-                            move |checked| {
-                                Message::ToggleActionMonitor(id.clone(), idx, monitor_id, checked)
+                            let old = monitor_id.clone();
+                            move |selected| {
+                                Message::RebindMonitorTarget(
+                                    id.clone(),
+                                    idx,
+                                    old.clone(),
+                                    keys[selected].clone(),
+                                )
                             }
-                        }))
-                        .align_y(Alignment::Center),
-                );
+                        }));
+                    }
+                    displays = displays.push(row);
+                }
 
                 if action.action_type != ActionType::Off
                     && action.target == ActionTarget::InputSource
@@ -389,11 +425,12 @@ impl AppModel {
                             .push(widget::text::caption("Input source").width(Length::Fill))
                             .push(widget::dropdown(labels, selected_source, {
                                 let id = id.clone();
+                                let target = monitor_id.clone();
                                 move |selected| {
                                     Message::SetMonitorInput(
                                         id.clone(),
                                         idx,
-                                        monitor_id,
+                                        target.clone(),
                                         Some(sources[selected]),
                                     )
                                 }
