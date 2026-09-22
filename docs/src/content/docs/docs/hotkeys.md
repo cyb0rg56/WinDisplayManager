@@ -1,12 +1,7 @@
 ---
-layout: default
-title: Hotkeys — WinDisplayManager
-permalink: /docs/hotkeys/
+title: Hotkeys
+description: How WinDisplayManager hotkey recording, action chains, and config work.
 ---
-
-{% include nav.html %}
-
-# Hotkeys
 
 WinDisplayManager binds **global hotkeys** (they work even when the app isn't
 focused) to **actions**. Each hotkey is a key combination plus a *chain* of one
@@ -40,7 +35,7 @@ Each hotkey card shows:
 | **Contrast** | An absolute level (Set) or a signed delta (Offset), clamped to the monitor's range. |
 | **Input Source** | Switch to HDMI, DisplayPort, USB-C, VGA or DVI. Can switch a **different input per monitor** (see below). |
 | **Power Mode** | On / Standby / Suspend / Off, via the DDC/CI power state. |
-| **Apply Profile** | Applies a saved [display profile]({{ site.baseurl }}/docs/profiles/). |
+| **Apply Profile** | Applies a saved [display profile](/docs/profiles/). |
 | **Custom VCP Code** | Write any raw DDC/CI VCP feature code (in hex). Set writes the value directly; Offset reads the monitor's current value first and adds the delta. |
 
 ### Editing an action
@@ -158,5 +153,3 @@ as applicable). You normally never need to touch this file — the Hotkeys page
 manages it for you — but it's plain, human-readable JSON if you ever want to
 back it up or inspect it. Older configuration shapes are read automatically;
 legacy numeric monitor selections require explicit rebinding as described above.
-
-{% include footer.html %}

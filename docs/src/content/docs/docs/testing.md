@@ -1,12 +1,7 @@
 ---
-layout: default
-title: Testing — WinDisplayManager
-permalink: /docs/testing/
+title: Testing
+description: Automated gates, the manual hardware checklist, and how to tag a release.
 ---
-
-{% include nav.html %}
-
-# Testing
 
 Contributor runbook for automated gates and manual hardware checks. Automated
 tests do not call the real display-configuration apply API and do not prove
@@ -110,5 +105,3 @@ rather than guess a target.
 - Scalar MCCS input-source readback uses the low byte only. A decoded reply is the monitor's reported setting; it does not prove which physical source is displayed or that a switch finished. This is not an MCCS 3.0 table-form input control.
 - CCD remapping rejects missing identities, ambiguous routing, virtual or desktop-image layouts, and missing source modes. Applying a profile was confirmed on the maintainer's layouts, not on every virtual or multi-GPU arrangement.
 - Hardware actions are not transactional. A later failure does not roll back a change that already completed. Manual **Refresh** cancels waiting work; an already-running hardware call finishes before discovery begins.
-
-{% include footer.html %}

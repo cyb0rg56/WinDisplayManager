@@ -1,12 +1,7 @@
 ---
-layout: default
-title: Profiles — WinDisplayManager
-permalink: /docs/profiles/
+title: Profiles
+description: How WinDisplayManager display profiles are stored and applied.
 ---
-
-{% include nav.html %}
-
-# Display profiles
 
 A **profile** is a saved snapshot of your monitor layout — which displays are
 enabled, their resolution, position, and orientation — captured via the
@@ -31,7 +26,7 @@ capturing and overwriting it.
 
 Click **Apply** next to a saved profile to apply it immediately. To bind a
 profile to a global hotkey, click **Hotkey** next to it — this adds a
-matching *Apply Profile* hotkey on the [Hotkeys page]({{ site.baseurl }}/docs/hotkeys/)
+matching *Apply Profile* hotkey on the [Hotkeys page](/docs/hotkeys/)
 and jumps there so you can record a key combination — letting you switch
 layouts without opening the app.
 
@@ -100,5 +95,3 @@ that alone does not guarantee file-format or identity compatibility. Each file
 contains the profile name, a creation timestamp, and the captured CCD display
 configuration. As with hotkeys, you don't need to edit these by hand, but
 they're plain JSON if you want to inspect, back up, or share them.
-
-{% include footer.html %}
