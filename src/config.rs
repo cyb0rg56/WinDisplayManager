@@ -331,6 +331,9 @@ impl Default for HotkeyActionSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hotkey {
     pub id: String,
+    /// Optional name shown on the hotkey card. Blank labels use a numbered title.
+    #[serde(default)]
+    pub label: String,
     pub binding: HotkeyBinding,
     pub actions: Vec<HotkeyActionSpec>,
 }
@@ -340,6 +343,7 @@ impl Hotkey {
     pub fn new_empty() -> Self {
         Self {
             id: new_id(),
+            label: String::new(),
             binding: HotkeyBinding::unbound(),
             actions: vec![HotkeyActionSpec::default()],
         }
@@ -349,6 +353,7 @@ impl Hotkey {
     pub fn new_for_profile(profile_name: String) -> Self {
         Self {
             id: new_id(),
+            label: String::new(),
             binding: HotkeyBinding::unbound(),
             actions: vec![HotkeyActionSpec {
                 action_type: ActionType::Set,
@@ -359,6 +364,41 @@ impl Hotkey {
             }],
         }
     }
+}
+
+/// Card heading for one hotkey: the visible title and the empty-field placeholder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyHeading {
+    /// Trimmed custom label, or [`Self::fallback`] when the label is blank.
+    pub title: String,
+    /// Numbered name (`Hotkey (n)`) used when the custom label is empty.
+    pub fallback: String,
+}
+
+/// Headings in list order. A non-blank label is the title and does not consume
+/// a number. A blank or whitespace-only label becomes `Hotkey (n)`, then `n`
+/// increases by 1.
+pub fn hotkey_headings(hotkeys: &[Hotkey]) -> Vec<HotkeyHeading> {
+    let mut next = 1u32;
+    hotkeys
+        .iter()
+        .map(|hotkey| {
+            let fallback = format!("Hotkey ({next})");
+            let label = hotkey.label.trim();
+            if label.is_empty() {
+                next += 1;
+                HotkeyHeading {
+                    title: fallback.clone(),
+                    fallback,
+                }
+            } else {
+                HotkeyHeading {
+                    title: label.to_string(),
+                    fallback,
+                }
+            }
+        })
+        .collect()
 }
 
 /// Generate a unique id for a new [`Hotkey`].
@@ -510,6 +550,7 @@ impl HotkeyConfig {
         for b in self.input_switch_bindings.drain(..) {
             self.hotkeys.push(Hotkey {
                 id: new_id(),
+                label: String::new(),
                 binding: b.hotkey,
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Set,
@@ -533,6 +574,7 @@ impl HotkeyConfig {
             };
             self.hotkeys.push(Hotkey {
                 id: new_id(),
+                label: String::new(),
                 binding: b.hotkey,
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Offset,
@@ -552,6 +594,7 @@ impl HotkeyConfig {
             };
             self.hotkeys.push(Hotkey {
                 id: new_id(),
+                label: String::new(),
                 binding: b.hotkey,
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Offset,
@@ -567,6 +610,7 @@ impl HotkeyConfig {
         for b in self.power_mode_bindings.drain(..) {
             self.hotkeys.push(Hotkey {
                 id: new_id(),
+                label: String::new(),
                 binding: b.hotkey,
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Set,
@@ -582,6 +626,7 @@ impl HotkeyConfig {
         for b in self.profile_bindings.drain(..) {
             self.hotkeys.push(Hotkey {
                 id: new_id(),
+                label: String::new(),
                 binding: b.hotkey,
                 actions: vec![HotkeyActionSpec {
                     action_type: ActionType::Set,
@@ -1248,5 +1293,36 @@ mod tests {
         assert!(!power.all_monitors);
         assert_eq!(power.monitors, vec![7.into()]);
         assert_eq!(power.power_mode, PowerMode::Off);
+    }
+
+    #[test]
+    fn missing_hotkey_label_deserializes_as_empty() {
+        let hotkey = Hotkey::new_empty();
+        let mut value = serde_json::to_value(&hotkey).unwrap();
+        value.as_object_mut().unwrap().remove("label");
+        let loaded: Hotkey = serde_json::from_value(value).unwrap();
+        assert!(loaded.label.is_empty());
+    }
+
+    #[test]
+    fn blank_hotkey_labels_are_numbered_and_custom_labels_skip_the_count() {
+        let mut hotkeys = vec![
+            Hotkey::new_empty(),
+            Hotkey::new_empty(),
+            Hotkey::new_empty(),
+            Hotkey::new_empty(),
+        ];
+        hotkeys[1].label = "  Work  ".into();
+        hotkeys[2].label = "   ".into();
+
+        let headings = hotkey_headings(&hotkeys);
+        assert_eq!(headings[0].title, "Hotkey (1)");
+        assert_eq!(headings[0].fallback, "Hotkey (1)");
+        assert_eq!(headings[1].title, "Work");
+        assert_eq!(headings[1].fallback, "Hotkey (2)");
+        assert_eq!(headings[2].title, "Hotkey (2)");
+        assert_eq!(headings[2].fallback, "Hotkey (2)");
+        assert_eq!(headings[3].title, "Hotkey (3)");
+        assert_eq!(headings[3].fallback, "Hotkey (3)");
     }
 }

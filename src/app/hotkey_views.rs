@@ -2,11 +2,16 @@ use super::hotkey_editor::{
     action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
 };
 use super::{AppModel, INPUT_SOURCES, Message, POWER_MODES, RecordingState};
-use crate::config::{ActionTarget, ActionType, Hotkey, HotkeyActionSpec, MonitorTarget};
+use crate::config::{
+    ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyHeading, MonitorTarget,
+    hotkey_headings,
+};
 use crate::ddc::PowerMode;
+use crate::icons::{self, AppIcon};
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::{Alignment, Length};
+use cosmic::theme;
 use cosmic::widget;
 
 fn power_mode_index(mode: &PowerMode) -> Option<usize> {
@@ -20,8 +25,9 @@ impl AppModel {
             .spacing(space_s)
             .width(Length::Fill);
 
-        for hotkey in &self.config.hotkeys.hotkeys {
-            hotkeys = hotkeys.push(self.view_hotkey_card(hotkey, space_s));
+        let headings = hotkey_headings(&self.config.hotkeys.hotkeys);
+        for (hotkey, heading) in self.config.hotkeys.hotkeys.iter().zip(headings) {
+            hotkeys = hotkeys.push(self.view_hotkey_card(hotkey, heading, space_s));
         }
 
         let add_row = widget::row::with_capacity(2)
@@ -29,19 +35,13 @@ impl AppModel {
             .push(widget::Space::new().width(Length::Fill))
             .spacing(space_s);
 
-        let save_label = if self.config_dirty {
-            "Save Configuration *"
-        } else {
-            "Save Configuration"
-        };
-        let content = widget::column::with_capacity(6)
+        let content = widget::column::with_capacity(5)
             .push(widget::text::title3("Hotkeys"))
             .push(widget::text::body(
                 "Configure global hotkeys and ordered display actions.",
             ))
             .push(add_row)
             .push(hotkeys)
-            .push(widget::button::suggested(save_label).on_press(Message::SaveConfig))
             .spacing(space_s)
             .width(Length::Fill);
 
@@ -55,7 +55,12 @@ impl AppModel {
         .into()
     }
 
-    fn view_hotkey_card(&self, hotkey: &Hotkey, space_s: u16) -> Element<'_, Message> {
+    fn view_hotkey_card<'a>(
+        &'a self,
+        hotkey: &'a Hotkey,
+        heading: HotkeyHeading,
+        space_s: u16,
+    ) -> Element<'a, Message> {
         let id = hotkey.id.clone();
         let expanded = self.expanded_hotkey.as_deref() == Some(id.as_str());
         let active = self.hotkey_status.get(&id).copied().unwrap_or(false);
@@ -69,11 +74,22 @@ impl AppModel {
         let summary = widget::row::with_capacity(5)
             .push(widget::text::body(hotkey.binding.to_string()).width(Length::Fill))
             .push(widget::text::caption(status))
-            .push(
-                widget::button::standard(if expanded { "Collapse" } else { "Edit" })
-                    .on_press(Message::ToggleHotkeyEditor(id.clone())),
-            )
-            .push(widget::button::destructive("Delete").on_press(Message::DeleteHotkey(id.clone())))
+            .push(icons::icon_button(
+                if expanded {
+                    AppIcon::Collapse
+                } else {
+                    AppIcon::Edit
+                },
+                if expanded { "Collapse" } else { "Edit" },
+                theme::Button::Standard,
+                Message::ToggleHotkeyEditor(id.clone()),
+            ))
+            .push(icons::icon_button(
+                AppIcon::Trash,
+                "Delete",
+                theme::Button::Destructive,
+                Message::RequestDeleteHotkey(id.clone()),
+            ))
             .spacing(space_s)
             .align_y(Alignment::Center);
 
@@ -103,6 +119,19 @@ impl AppModel {
             }
             .spacing(space_s)
             .align_y(Alignment::Center);
+            let label_row = widget::row::with_capacity(2)
+                .push(widget::text::body("Label").width(Length::Fixed(112.0)))
+                .push(
+                    widget::text_input(heading.fallback, &hotkey.label)
+                        .on_input({
+                            let id = id.clone();
+                            move |value| Message::SetHotkeyLabel(id.clone(), value)
+                        })
+                        .width(Length::Fill),
+                )
+                .spacing(space_s)
+                .align_y(Alignment::Center);
+            content = content.push(label_row);
             content = content.push(binding_row);
 
             for (idx, action) in hotkey.actions.iter().enumerate() {
@@ -114,7 +143,7 @@ impl AppModel {
         }
 
         cosmic::widget::settings::section()
-            .title(format!("Hotkey ({})", hotkey.actions.len()))
+            .title(heading.title)
             .add(content)
             .into()
     }
@@ -142,10 +171,12 @@ impl AppModel {
                 move |selected| Message::SetActionType(id.clone(), idx, type_options[selected])
             }))
             .push(widget::Space::new().width(Length::Fill))
-            .push(
-                widget::button::destructive("Delete Action")
-                    .on_press(Message::DeleteAction(id.clone(), idx)),
-            )
+            .push(icons::icon_button(
+                AppIcon::Trash,
+                "Delete Action",
+                theme::Button::Destructive,
+                Message::DeleteAction(id.clone(), idx),
+            ))
             .spacing(space_s)
             .align_y(Alignment::Center);
         let mut fields = widget::column::with_capacity(5)

@@ -44,11 +44,10 @@ impl AppModel {
         cosmic::app::Task::none()
     }
 
-    /// View for the settings page.
+    /// Settings shown in the header context drawer.
     pub(super) fn view_settings(&self) -> Element<'_, Message> {
         let space_s = cosmic::theme::spacing().space_s;
 
-        let header = widget::text::title3("Settings");
         let description =
             widget::text::body("Configure startup, hotkeys, and how displays are turned off.");
 
@@ -97,19 +96,13 @@ impl AppModel {
             );
         }
 
-        let content = widget::column::with_capacity(5)
-            .push(header)
+        widget::column::with_capacity(4)
             .push(description)
             .push(startup_section)
             .push(hotkeys_section)
             .push(power_section)
             .spacing(space_s)
-            .width(Length::Fill);
-
-        // Wrap in scrollable to ensure all content is accessible
-        widget::scrollable(content)
             .width(Length::Fill)
-            .height(Length::Fill)
             .into()
     }
 }
