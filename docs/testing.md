@@ -52,9 +52,10 @@ as `v0.1.4.0` does not match and the release job fails.
 
 1. On `main`, set `version` in `Cargo.toml` to `x.y.z`. Run a Cargo command
    such as `cargo check` so `Cargo.lock` records the same version, then commit
-   both files and push `main`.
-2. Run the automated gates above, or wait until the push to `main` is green.
-3. Tag that commit and push only that tag:
+   both files and push `main`. A direct push to `main` does not start the
+   workflow. Run the automated gates above locally if you want them before
+   tagging.
+2. Tag that commit and push only that tag:
 
 ```powershell
 git checkout main
@@ -66,9 +67,10 @@ git push origin v0.1.4
 Replace `0.1.4` with the version you committed. The tag has to point at the
 commit that contains that `Cargo.toml` version.
 
-Pushing the tag runs the same validation as a pull request, then the release
-job checks the tag against `Cargo.toml` and publishes the already built
-artifacts. It does not rebuild or sign them. The GitHub Release receives:
+Pushing the tag is the release gate. It runs the same validation as a pull
+request. If that passes, the release job checks the tag against `Cargo.toml`
+and publishes the already built artifacts. It does not rebuild or sign them.
+The GitHub Release receives:
 
 - `windisplaymanager_rs-v0.1.4.exe`
 - unsigned `windisplaymanager_rs-0.1.4.0.msix` (the fourth part is always `.0`)
