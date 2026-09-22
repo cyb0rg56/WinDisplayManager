@@ -83,6 +83,7 @@ pub enum Message {
     HotkeyTriggered(u32),
     ToggleHotkeys(bool),
     AddHotkey,
+    SetHotkeyLabel(String, String),
     ToggleHotkeyEditor(String),
     DeleteHotkey(String),
     StartRecording(String),
@@ -408,6 +409,7 @@ impl cosmic::Application for AppModel {
                     | Message::ToggleHotkeys(_)
                     | Message::SaveConfig
                     | Message::AddHotkey
+                    | Message::SetHotkeyLabel(_, _)
                     | Message::DeleteHotkey(_)
                     | Message::StartRecording(_)
                     | Message::ClearBinding(_)
@@ -483,6 +485,7 @@ impl cosmic::Application for AppModel {
             // -- Hotkey actions ---------------------------------------------
             Message::HotkeyTriggered(id) => return self.handle_hotkey_triggered(id),
             Message::AddHotkey => self.add_hotkey(),
+            Message::SetHotkeyLabel(id, label) => self.set_hotkey_label(id, label),
             Message::ToggleHotkeyEditor(id) => self.toggle_hotkey_editor(id),
             Message::DeleteHotkey(id) => self.delete_hotkey(id),
             Message::StartRecording(hotkey_id) => self.start_recording(hotkey_id),

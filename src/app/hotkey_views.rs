@@ -2,7 +2,10 @@ use super::hotkey_editor::{
     action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
 };
 use super::{AppModel, INPUT_SOURCES, Message, POWER_MODES, RecordingState};
-use crate::config::{ActionTarget, ActionType, Hotkey, HotkeyActionSpec, MonitorTarget};
+use crate::config::{
+    ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyHeading, MonitorTarget,
+    hotkey_headings,
+};
 use crate::ddc::PowerMode;
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
@@ -20,8 +23,9 @@ impl AppModel {
             .spacing(space_s)
             .width(Length::Fill);
 
-        for hotkey in &self.config.hotkeys.hotkeys {
-            hotkeys = hotkeys.push(self.view_hotkey_card(hotkey, space_s));
+        let headings = hotkey_headings(&self.config.hotkeys.hotkeys);
+        for (hotkey, heading) in self.config.hotkeys.hotkeys.iter().zip(headings) {
+            hotkeys = hotkeys.push(self.view_hotkey_card(hotkey, heading, space_s));
         }
 
         let add_row = widget::row::with_capacity(2)
@@ -55,7 +59,12 @@ impl AppModel {
         .into()
     }
 
-    fn view_hotkey_card(&self, hotkey: &Hotkey, space_s: u16) -> Element<'_, Message> {
+    fn view_hotkey_card<'a>(
+        &'a self,
+        hotkey: &'a Hotkey,
+        heading: HotkeyHeading,
+        space_s: u16,
+    ) -> Element<'a, Message> {
         let id = hotkey.id.clone();
         let expanded = self.expanded_hotkey.as_deref() == Some(id.as_str());
         let active = self.hotkey_status.get(&id).copied().unwrap_or(false);
@@ -103,6 +112,19 @@ impl AppModel {
             }
             .spacing(space_s)
             .align_y(Alignment::Center);
+            let label_row = widget::row::with_capacity(2)
+                .push(widget::text::body("Label").width(Length::Fixed(112.0)))
+                .push(
+                    widget::text_input(heading.fallback, &hotkey.label)
+                        .on_input({
+                            let id = id.clone();
+                            move |value| Message::SetHotkeyLabel(id.clone(), value)
+                        })
+                        .width(Length::Fill),
+                )
+                .spacing(space_s)
+                .align_y(Alignment::Center);
+            content = content.push(label_row);
             content = content.push(binding_row);
 
             for (idx, action) in hotkey.actions.iter().enumerate() {
@@ -114,7 +136,7 @@ impl AppModel {
         }
 
         cosmic::widget::settings::section()
-            .title(format!("Hotkey ({})", hotkey.actions.len()))
+            .title(heading.title)
             .add(content)
             .into()
     }

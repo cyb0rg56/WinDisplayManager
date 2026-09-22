@@ -305,6 +305,19 @@ impl AppModel {
         cosmic::app::Task::none()
     }
 
+    pub(super) fn set_hotkey_label(&mut self, id: String, label: String) {
+        if let Some(hotkey) = self
+            .config
+            .hotkeys
+            .hotkeys
+            .iter_mut()
+            .find(|hotkey| hotkey.id == id)
+        {
+            hotkey.label = label;
+        }
+        self.config_dirty = true;
+    }
+
     pub(super) fn add_hotkey(&mut self) {
         let hotkey = Hotkey::new_empty();
         let id = hotkey.id.clone();
