@@ -5,10 +5,11 @@
 //! `<name>.json` per profile.
 
 use crate::ccd::{self, DisplayConfig};
+use crate::persistence::{self, LoadOutcome, SCHEMA_VERSION, WriteMode};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,8 @@ pub type Result<T> = std::result::Result<T, ProfileError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayProfile {
+    #[serde(default)]
+    schema_version: u32,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
@@ -58,11 +61,6 @@ pub struct DisplayProfile {
 pub fn profiles_dir() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("MonitorSwitcher").join("Profiles")
-}
-
-fn ensure_dir() -> Result<()> {
-    fs::create_dir_all(profiles_dir())?;
-    Ok(())
 }
 
 /// Strip characters invalid in Windows filenames and reject traversal/empty
@@ -113,31 +111,36 @@ pub fn profile_exists(name: &str) -> Result<bool> {
 }
 
 pub fn save_profile(name: &str, config: &DisplayConfig, replace: bool) -> Result<()> {
+    save_profile_in(&profiles_dir(), name, config, replace)
+}
+
+fn save_profile_in(dir: &Path, name: &str, config: &DisplayConfig, replace: bool) -> Result<()> {
     let safe = sanitize_name(name).ok_or(ProfileError::InvalidName)?;
-    ensure_dir()?;
     let profile = DisplayProfile {
+        schema_version: SCHEMA_VERSION,
         name: safe.clone(),
         created: Some(now_iso8601()),
         config: config.clone(),
     };
-    let json = serde_json::to_string_pretty(&profile)?;
-    let path = profiles_dir().join(format!("{safe}.json"));
-    if replace {
-        fs::write(path, json)?;
+    let json = serde_json::to_vec_pretty(&profile)?;
+    let path = dir.join(format!("{safe}.json"));
+    let mode = if replace {
+        WriteMode::Replace
     } else {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-        {
-            Ok(mut file) => file.write_all(json.as_bytes())?,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(ProfileError::AlreadyExists(safe));
-            }
-            Err(error) => return Err(error.into()),
+        WriteMode::CreateNew
+    };
+    match persistence::save_with_backup(&path, &json, mode, |old| decode_profile(old).map(|_| ())) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(ProfileError::AlreadyExists(safe))
         }
+        result => result.map_err(ProfileError::Io),
     }
-    Ok(())
+}
+
+fn decode_profile(bytes: &[u8]) -> io::Result<DisplayProfile> {
+    let mut profile: DisplayProfile = persistence::decode_json(bytes)?;
+    profile.schema_version = SCHEMA_VERSION;
+    Ok(profile)
 }
 
 /// Capture the current active layout and save it under `name`.
@@ -149,12 +152,11 @@ pub fn save_current(name: &str, replace: bool) -> Result<()> {
 /// Load a profile by name.
 pub fn load_profile(name: &str) -> Result<DisplayProfile> {
     let path = profile_path(name)?;
-    if !path.exists() {
-        return Err(ProfileError::NotFound(name.to_string()));
+    match persistence::load(&path, decode_profile) {
+        LoadOutcome::Loaded(profile) => Ok(profile),
+        LoadOutcome::Missing => Err(ProfileError::NotFound(name.to_string())),
+        LoadOutcome::Failed(error) => Err(error.into()),
     }
-    let contents = fs::read_to_string(&path)?;
-    let profile: DisplayProfile = serde_json::from_str(&contents)?;
-    Ok(profile)
 }
 
 /// Delete a profile by name.
@@ -212,6 +214,76 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::{backup_path, tests::TestDir};
+
+    fn empty_config() -> DisplayConfig {
+        DisplayConfig {
+            paths: Vec::new(),
+            modes: Vec::new(),
+            monitors: Vec::new(),
+            path_monitors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn new_profile_never_overwrites_existing_name_or_sanitized_alias() {
+        let dir = TestDir::new();
+        let path = dir.0.join("Home.json");
+        save_profile_in(&dir.0, "Home", &empty_config(), false).unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(decode_profile(&original).is_ok());
+        for name in ["Home", "H<ome"] {
+            assert!(matches!(
+                save_profile_in(&dir.0, name, &empty_config(), false),
+                Err(ProfileError::AlreadyExists(_))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), original);
+        }
+        assert!(!backup_path(&path).exists());
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn profile_replace_preserves_backup_and_refuses_bad_or_future_files() {
+        let dir = TestDir::new();
+        let path = dir.0.join("Home.json");
+        save_profile_in(&dir.0, "Home", &empty_config(), false).unwrap();
+        let original = fs::read(&path).unwrap();
+        save_profile_in(&dir.0, "Home", &empty_config(), true).unwrap();
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), original);
+        let mut future: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        future["schema_version"] = serde_json::json!(SCHEMA_VERSION + 1);
+        let future = serde_json::to_vec(&future).unwrap();
+        for bytes in [b"bad profile".as_slice(), future.as_slice()] {
+            fs::write(&path, bytes).unwrap();
+            assert!(decode_profile(bytes).is_err());
+            assert!(save_profile_in(&dir.0, "Home", &empty_config(), true).is_err());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(fs::read(backup_path(&path)).unwrap(), original);
+        }
+        dir.assert_no_temps();
+    }
+
+    #[test]
+    fn unversioned_profile_loads_and_gets_version_on_explicit_save() {
+        let dir = TestDir::new();
+        let path = dir.0.join("Legacy.json");
+        let original = br#"{"name":"Legacy","config":{"paths":[],"modes":[],"monitors":[]}}"#;
+        fs::write(&path, original).unwrap();
+        let LoadOutcome::Loaded(profile) = persistence::load(&path, decode_profile) else {
+            panic!("Legacy profile did not load")
+        };
+        assert_eq!(profile.schema_version, SCHEMA_VERSION);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        save_profile_in(&dir.0, "Legacy", &profile.config, true).unwrap();
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), original);
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"schema_version\": 1")
+        );
+        dir.assert_no_temps();
+    }
 
     #[test]
     fn sanitize_rejects_traversal_and_empty() {

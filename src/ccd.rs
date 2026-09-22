@@ -5,22 +5,23 @@
 //! serde data structs, and blocking functions. The application runs these via
 //! `tokio::task::spawn_blocking` wrapped in `cosmic::app::Task::perform`.
 //!
-//! This is a faithful port of the Win32 CCD apply/remap algorithm used by the
-//! original *MonitorSwitcher* tool. Adapter LUIDs are not stable across reboots
-//! or replug, so a saved configuration must be remapped onto the live hardware
-//! before it can be applied.
+//! Adapter LUIDs and endpoint IDs are not persistent monitor identities. Saved
+//! configurations are conservatively remapped by monitor device path before
+//! Windows validates and applies them.
+
+mod remap;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use windows_sys::Win32::Devices::Display::{
-    DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_MODE_INFO_0,
-    DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET,
-    DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_RATIONAL, DISPLAYCONFIG_TARGET_DEVICE_NAME,
-    DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS,
-    QueryDisplayConfig, SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE,
-    SDC_USE_SUPPLIED_DISPLAY_CONFIG, SetDisplayConfig,
+    DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+    DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_MODE_INFO_0, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET,
+    DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_RATIONAL, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+    DISPLAYCONFIG_TARGET_DEVICE_NAME, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes,
+    QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig, SDC_APPLY, SDC_SAVE_TO_DATABASE,
+    SDC_USE_SUPPLIED_DISPLAY_CONFIG, SDC_VALIDATE, SetDisplayConfig,
 };
-use windows_sys::Win32::Foundation::LUID;
+use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LUID};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HWND_BROADCAST, PostMessageW, SC_MONITORPOWER, WM_SYSCOMMAND,
 };
@@ -37,11 +38,29 @@ pub enum CcdError {
     #[error("Failed to query display configuration (Win32 error {0})")]
     Query(u32),
 
+    #[error(
+        "Display configuration query still reported insufficient buffers after {attempts} attempts"
+    )]
+    QueryRetryExhausted { attempts: usize },
+
     #[error("Failed to apply display configuration (Win32 error {0})")]
     Apply(i32),
 
     #[error("Profile contains no display paths")]
     Empty,
+
+    #[error(
+        "Invalid display profile: {0}. Arrange the displays in Windows and recapture the profile"
+    )]
+    InvalidConfig(String),
+
+    #[error("Cannot safely restore display profile: {0}")]
+    Remap(String),
+
+    #[error(
+        "Windows rejected the restored layout (Win32 error {0}); check connected displays and supported modes, then recapture the profile if necessary"
+    )]
+    Validate(i32),
 }
 
 pub type Result<T> = std::result::Result<T, CcdError>;
@@ -50,12 +69,12 @@ pub type Result<T> = std::result::Result<T, CcdError>;
 // Serde mirror types
 //
 // These mirror the Win32 `DISPLAYCONFIG_*` arrays. The mode union payload is
-// stored verbatim as opaque bytes: the remap algorithm only ever touches
-// `adapter_id`, so the union contents never need to be interpreted and always
-// round-trip losslessly (including the rare desktop-image variant).
+// stored verbatim as opaque bytes. Remapping changes only endpoint IDs and
+// associations, preserving resolution, position and timing payloads. Unsupported
+// virtual-mode/desktop-image layouts remain readable but are rejected on apply.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Luid {
     pub low: u32,
     pub high: i32,
@@ -147,6 +166,9 @@ pub struct DisplayConfig {
     pub modes: Vec<ModeInfo>,
     /// Parallel-indexed to `modes`.
     pub monitors: Vec<MonitorInfo>,
+    /// Target identities parallel-indexed to `paths`, even without target modes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_monitors: Vec<MonitorInfo>,
 }
 
 // ---------------------------------------------------------------------------
@@ -155,114 +177,50 @@ pub struct DisplayConfig {
 
 /// Capture the currently active display configuration.
 pub fn capture_active_config() -> Result<DisplayConfig> {
-    let (paths, modes, monitors) = query(QDC_ONLY_ACTIVE_PATHS)?;
-    Ok(DisplayConfig {
-        paths,
-        modes,
-        monitors,
-    })
+    query(QDC_ONLY_ACTIVE_PATHS)
 }
 
-/// Apply a saved display configuration, remapping its adapter LUIDs onto the
-/// live hardware first. Falls back to matching monitors by EDID friendly name.
+/// Apply only after identity remapping, structural checks and Windows validation.
 pub fn apply_config(saved: &DisplayConfig) -> Result<()> {
-    if saved.paths.is_empty() {
-        return Err(CcdError::Empty);
+    remap::validate_layout(&saved.paths, &saved.modes)?;
+    let live = query(QDC_ALL_PATHS)?;
+    apply_config_with(saved, &live, set_display_config)
+}
+
+// Injection is limited to the final API boundary so tests never change displays.
+fn apply_config_with(
+    saved: &DisplayConfig,
+    live: &DisplayConfig,
+    mut set: impl FnMut(&[DISPLAYCONFIG_PATH_INFO], &[DISPLAYCONFIG_MODE_INFO], u32) -> i32,
+) -> Result<()> {
+    let config = remap::remap_config(saved, live)?;
+    remap::validate_layout(&config.paths, &config.modes)?;
+    let paths: Vec<_> = config.paths.iter().map(path_to_raw).collect();
+    let modes = config
+        .modes
+        .iter()
+        .map(mode_to_raw)
+        .collect::<Result<Vec<_>>>()?;
+
+    // ALLOW_CHANGES would let Windows silently change the saved layout/modes.
+    // SAVE_TO_DATABASE is legal only on the APPLY call, not on VALIDATE.
+    let err = set(
+        &paths,
+        &modes,
+        SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_VALIDATE,
+    );
+    if err != 0 {
+        return Err(CcdError::Validate(err));
     }
-
-    // Query the live hardware (all paths, needed for remapping).
-    let (live_paths, live_modes, live_monitors) = query(QDC_ALL_PATHS)?;
-
-    let mut paths = saved.paths.clone();
-    let mut modes = saved.modes.clone();
-
-    // ---- Pass 1: remap path adapter LUIDs by (source id, target id) ----
-    for sp in paths.iter_mut() {
-        for lp in &live_paths {
-            if sp.source.id == lp.source.id && sp.target.id == lp.target.id {
-                sp.source.adapter_id.low = lp.source.adapter_id.low;
-                sp.target.adapter_id.low = lp.target.adapter_id.low;
-                break;
-            }
-        }
-    }
-
-    // ---- Pass 2: remap mode adapter LUIDs using the (remapped) paths ----
-    for m in 0..modes.len() {
-        if modes[m].info_type != DISPLAYCONFIG_MODE_INFO_TYPE_TARGET {
-            continue;
-        }
-        for n in 0..paths.len() {
-            if modes[m].id == paths[n].target.id {
-                let m_low = modes[m].adapter_id.low;
-                let source_id = paths[n].source.id;
-                let source_low = paths[n].source.adapter_id.low;
-                let target_low = paths[n].target.adapter_id.low;
-                // Fix the matching source mode first.
-                for k in 0..modes.len() {
-                    if modes[k].id == source_id
-                        && modes[k].adapter_id.low == m_low
-                        && modes[k].info_type == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
-                    {
-                        modes[k].adapter_id.low = source_low;
-                        break;
-                    }
-                }
-                modes[m].adapter_id.low = target_low;
-                break;
-            }
-        }
-    }
-
-    // ---- Primary apply ----
-    let flags =
-        SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_APPLY | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES;
-    let err = set_display_config(&paths, &modes, flags);
-    if err == 0 {
-        return Ok(());
-    }
-    log::warn!("Primary display apply failed (error {err}); trying EDID fallback");
-
-    // ---- Fallback: match monitors by EDID friendly name, remap full LUID ----
-    if !saved.monitors.is_empty() {
-        // Reset to the original saved arrays.
-        let mut paths = saved.paths.clone();
-        let mut modes = saved.modes.clone();
-
-        let count = modes.len().min(saved.monitors.len());
-        for m in 0..count {
-            for j in 0..live_monitors.len() {
-                let saved_name = &saved.monitors[m].friendly_name;
-                let live_name = &live_monitors[j].friendly_name;
-                if saved_name.is_empty() || live_name.is_empty() || saved_name != live_name {
-                    continue;
-                }
-                let old = modes[m].adapter_id; // full LUID (low + high)
-                let new = live_modes[j].adapter_id;
-                for sp in paths.iter_mut() {
-                    if sp.target.adapter_id == old {
-                        sp.target.adapter_id = new;
-                        sp.source.adapter_id = new;
-                    }
-                }
-                for sm in modes.iter_mut() {
-                    if sm.adapter_id == old {
-                        sm.adapter_id = new;
-                    }
-                }
-                modes[m].adapter_id = new;
-                break;
-            }
-        }
-
-        let err = set_display_config(&paths, &modes, flags);
-        if err == 0 {
-            return Ok(());
-        }
+    let err = set(
+        &paths,
+        &modes,
+        SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_APPLY | SDC_SAVE_TO_DATABASE,
+    );
+    if err != 0 {
         return Err(CcdError::Apply(err));
     }
-
-    Err(CcdError::Apply(err))
+    Ok(())
 }
 
 /// Broadcast the system "monitor off" power command.
@@ -287,50 +245,159 @@ pub fn turn_off_monitors() {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Query the display configuration for the given flags, returning mirror types.
-fn query(flags: u32) -> Result<(Vec<PathInfo>, Vec<ModeInfo>, Vec<MonitorInfo>)> {
-    // SAFETY: standard two-call CCD query pattern with correctly sized buffers.
-    unsafe {
-        let mut num_paths: u32 = 0;
-        let mut num_modes: u32 = 0;
-        let err = GetDisplayConfigBufferSizes(flags, &mut num_paths, &mut num_modes);
+const QUERY_MAX_ATTEMPTS: usize = 3;
+
+fn query_with_retry(
+    mut get_sizes: impl FnMut(&mut u32, &mut u32) -> u32,
+    mut query_config: impl FnMut(
+        &mut u32,
+        &mut [DISPLAYCONFIG_PATH_INFO],
+        &mut u32,
+        &mut [DISPLAYCONFIG_MODE_INFO],
+    ) -> u32,
+) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>)> {
+    for _ in 0..QUERY_MAX_ATTEMPTS {
+        let mut num_paths = 0;
+        let mut num_modes = 0;
+        let err = get_sizes(&mut num_paths, &mut num_modes);
         if err != 0 {
             return Err(CcdError::BufferSizes(err));
         }
 
-        let mut raw_paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
-        let mut raw_modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
-        let err = QueryDisplayConfig(
-            flags,
-            &mut num_paths,
-            raw_paths.as_mut_ptr(),
-            &mut num_modes,
-            raw_modes.as_mut_ptr(),
-            std::ptr::null_mut(),
-        );
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+        let err = query_config(&mut num_paths, &mut paths, &mut num_modes, &mut modes);
+        if err == ERROR_INSUFFICIENT_BUFFER {
+            // Topology can grow between calls; discard all counts and buffers.
+            continue;
+        }
         if err != 0 {
             return Err(CcdError::Query(err));
         }
-        raw_paths.truncate(num_paths as usize);
-        raw_modes.truncate(num_modes as usize);
+        paths.truncate(num_paths as usize);
+        modes.truncate(num_modes as usize);
+        return Ok((paths, modes));
+    }
 
-        // Additional monitor info is parallel-indexed to the modes array.
-        let mut monitors = Vec::with_capacity(raw_modes.len());
-        for m in &raw_modes {
-            if m.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET {
-                monitors.push(get_monitor_additional_info(m.adapterId, m.id));
-            } else {
-                monitors.push(MonitorInfo::default());
-            }
+    Err(CcdError::QueryRetryExhausted {
+        attempts: QUERY_MAX_ATTEMPTS,
+    })
+}
+
+fn query_raw(flags: u32) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>)> {
+    query_with_retry(
+        // SAFETY: both output counts point to initialized, writable values.
+        |num_paths, num_modes| unsafe { GetDisplayConfigBufferSizes(flags, num_paths, num_modes) },
+        // SAFETY: the wrapper allocates initialized buffers matching the input
+        // counts on each attempt. No topology ID is requested for these flags.
+        |num_paths, paths, num_modes, modes| unsafe {
+            QueryDisplayConfig(
+                flags,
+                num_paths,
+                paths.as_mut_ptr(),
+                num_modes,
+                modes.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        },
+    )
+}
+
+/// An active CCD endpoint, not an enumeration position or a persistent LUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveTarget {
+    pub source_adapter: Luid,
+    pub source_id: u32,
+    pub target_adapter: Luid,
+    pub target_id: u32,
+    pub gdi_name: String,
+    pub device_path: String,
+    pub friendly_name: String,
+}
+
+pub(crate) fn active_targets() -> Result<Vec<ActiveTarget>> {
+    let (paths, _) = query_raw(QDC_ONLY_ACTIVE_PATHS)?;
+    let mut targets = Vec::new();
+    for path in paths {
+        let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+        source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        // SAFETY: a correctly sized source-name request with its header first.
+        let err = unsafe { DisplayConfigGetDeviceInfo(&mut source.header) };
+        if err != 0 {
+            return Err(CcdError::Query(err as u32));
         }
+        let target = get_monitor_additional_info(path.targetInfo.adapterId, path.targetInfo.id);
+        // Keep failed/empty target names in the association set. Dropping them
+        // could make a cloned source look falsely one-to-one.
+        let record = ActiveTarget {
+            source_adapter: path.sourceInfo.adapterId.into(),
+            source_id: path.sourceInfo.id,
+            target_adapter: path.targetInfo.adapterId.into(),
+            target_id: path.targetInfo.id,
+            gdi_name: wide_to_string(&source.viewGdiDeviceName).to_ascii_lowercase(),
+            device_path: target.device_path,
+            friendly_name: target.friendly_name,
+        };
+        if !targets.contains(&record) {
+            targets.push(record);
+        }
+    }
+    Ok(targets)
+}
 
-        let paths = raw_paths.iter().map(path_to_mirror).collect();
-        let modes = raw_modes.iter().map(mode_to_mirror).collect();
-        Ok((paths, modes, monitors))
+/// Query the display configuration for the given flags, returning mirror types.
+fn query(flags: u32) -> Result<DisplayConfig> {
+    let (raw_paths, raw_modes) = query_raw(flags)?;
+    Ok(config_from_raw(
+        &raw_paths,
+        &raw_modes,
+        get_monitor_additional_info,
+    ))
+}
+
+fn config_from_raw(
+    raw_paths: &[DISPLAYCONFIG_PATH_INFO],
+    raw_modes: &[DISPLAYCONFIG_MODE_INFO],
+    mut monitor_info: impl FnMut(LUID, u32) -> MonitorInfo,
+) -> DisplayConfig {
+    let mut targets = std::collections::HashMap::new();
+    let path_monitors = raw_paths
+        .iter()
+        .map(|path| {
+            let target = &path.targetInfo;
+            // QDC_ALL_PATHS includes inactive connected targets with no modes and
+            // multiple possible sources. Query each adapter-qualified target once.
+            targets
+                .entry((Luid::from(target.adapterId), target.id))
+                .or_insert_with(|| monitor_info(target.adapterId, target.id))
+                .clone()
+        })
+        .collect();
+    let monitors = raw_modes
+        .iter()
+        .map(|mode| {
+            if mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET {
+                targets
+                    .get(&(Luid::from(mode.adapterId), mode.id))
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                MonitorInfo::default()
+            }
+        })
+        .collect();
+    DisplayConfig {
+        paths: raw_paths.iter().map(path_to_mirror).collect(),
+        modes: raw_modes.iter().map(mode_to_mirror).collect(),
+        monitors,
+        path_monitors,
     }
 }
 
-/// Retrieve EDID/friendly-name info for a target mode. Invalid on failure.
+/// Retrieve identity/EDID info for a target endpoint, with or without a mode.
 fn get_monitor_additional_info(adapter_id: LUID, target_id: u32) -> MonitorInfo {
     // SAFETY: `header` is the first field of the struct; the OS uses `size` to
     // fill the remainder.
@@ -354,17 +421,19 @@ fn get_monitor_additional_info(adapter_id: LUID, target_id: u32) -> MonitorInfo 
     }
 }
 
-/// Convert saved mirror arrays to Win32 arrays and call `SetDisplayConfig`.
-fn set_display_config(paths: &[PathInfo], modes: &[ModeInfo], flags: u32) -> i32 {
-    let raw_paths: Vec<DISPLAYCONFIG_PATH_INFO> = paths.iter().map(path_to_raw).collect();
-    let raw_modes: Vec<DISPLAYCONFIG_MODE_INFO> = modes.iter().map(mode_to_raw).collect();
-    // SAFETY: pointers/lengths refer to the freshly built arrays above.
+/// Call only with arrays structurally checked by `apply_config_with`.
+fn set_display_config(
+    paths: &[DISPLAYCONFIG_PATH_INFO],
+    modes: &[DISPLAYCONFIG_MODE_INFO],
+    flags: u32,
+) -> i32 {
+    // SAFETY: pointers refer to validated arrays, with lengths checked to fit u32.
     unsafe {
         SetDisplayConfig(
-            raw_paths.len() as u32,
-            raw_paths.as_ptr(),
-            raw_modes.len() as u32,
-            raw_modes.as_ptr(),
+            paths.len() as u32,
+            paths.as_ptr(),
+            modes.len() as u32,
+            modes.as_ptr(),
             flags,
         )
     }
@@ -436,7 +505,8 @@ fn mode_to_mirror(m: &DISPLAYCONFIG_MODE_INFO) -> ModeInfo {
     }
 }
 
-fn mode_to_raw(m: &ModeInfo) -> DISPLAYCONFIG_MODE_INFO {
+fn mode_to_raw(m: &ModeInfo) -> Result<DISPLAYCONFIG_MODE_INFO> {
+    remap::validate_mode(m)?;
     let mut raw = DISPLAYCONFIG_MODE_INFO {
         infoType: m.info_type,
         id: m.id,
@@ -444,13 +514,13 @@ fn mode_to_raw(m: &ModeInfo) -> DISPLAYCONFIG_MODE_INFO {
         // SAFETY: zero-initialised union, overwritten with the saved payload below.
         Anonymous: unsafe { std::mem::zeroed() },
     };
-    let n = std::mem::size_of::<DISPLAYCONFIG_MODE_INFO_0>().min(m.payload.len());
-    // SAFETY: `dst` points at the union; `n` is bounded by both buffer sizes.
+    let n = std::mem::size_of::<DISPLAYCONFIG_MODE_INFO_0>();
+    // SAFETY: validation requires an exact-sized payload; `dst` is that union.
     unsafe {
         let dst = &mut raw.Anonymous as *mut DISPLAYCONFIG_MODE_INFO_0 as *mut u8;
         std::ptr::copy_nonoverlapping(m.payload.as_ptr(), dst, n);
     }
-    raw
+    Ok(raw)
 }
 
 /// Convert a NUL-terminated wide string (fixed array) to a `String`.
@@ -466,6 +536,155 @@ fn wide_to_string(wide: &[u16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER};
+
+    #[test]
+    fn query_retries_with_fresh_sizes_counts_and_buffers() {
+        let size_calls = Cell::new(0);
+        let query_calls = Cell::new(0);
+        let (paths, modes) = query_with_retry(
+            |num_paths, num_modes| {
+                assert_eq!(size_calls.get(), query_calls.get());
+                assert_eq!((*num_paths, *num_modes), (0, 0));
+                size_calls.set(size_calls.get() + 1);
+                (*num_paths, *num_modes) = match size_calls.get() {
+                    1 => (1, 2),
+                    2 => (3, 4),
+                    _ => panic!("unexpected sizing retry"),
+                };
+                0
+            },
+            |num_paths, paths, num_modes, modes| {
+                query_calls.set(query_calls.get() + 1);
+                assert_eq!(size_calls.get(), query_calls.get());
+                assert!(paths.iter().all(|path| path.flags == 0));
+                assert!(modes.iter().all(|mode| mode.id == 0));
+                match query_calls.get() {
+                    1 => {
+                        assert_eq!((*num_paths, *num_modes), (1, 2));
+                        assert_eq!((paths.len(), modes.len()), (1, 2));
+                        paths[0].flags = 99;
+                        modes[0].id = 99;
+                        (*num_paths, *num_modes) = (99, 99);
+                        ERROR_INSUFFICIENT_BUFFER
+                    }
+                    2 => {
+                        assert_eq!((*num_paths, *num_modes), (3, 4));
+                        assert_eq!((paths.len(), modes.len()), (3, 4));
+                        paths[0].flags = 7;
+                        modes[0].id = 8;
+                        (*num_paths, *num_modes) = (1, 1);
+                        0
+                    }
+                    _ => panic!("unexpected query retry"),
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!((size_calls.get(), query_calls.get()), (2, 2));
+        assert_eq!((paths.len(), modes.len()), (1, 1));
+        assert_eq!(paths[0].flags, 7);
+        assert_eq!(modes[0].id, 8);
+    }
+
+    #[test]
+    fn query_retries_are_bounded() {
+        let mut size_calls = 0;
+        let mut query_calls = 0;
+        let result = query_with_retry(
+            |num_paths, num_modes| {
+                size_calls += 1;
+                assert_eq!((*num_paths, *num_modes), (0, 0));
+                (*num_paths, *num_modes) = (1, 1);
+                0
+            },
+            |num_paths, paths, num_modes, modes| {
+                query_calls += 1;
+                assert_eq!((*num_paths, *num_modes), (1, 1));
+                assert_eq!((paths.len(), modes.len()), (1, 1));
+                (*num_paths, *num_modes) = (99, 99);
+                ERROR_INSUFFICIENT_BUFFER
+            },
+        );
+
+        let error = result.err().expect("query should exhaust its retries");
+        assert!(matches!(
+            error,
+            CcdError::QueryRetryExhausted { attempts: 3 }
+        ));
+        assert_eq!((size_calls, query_calls), (3, 3));
+        assert!(
+            error
+                .to_string()
+                .contains("insufficient buffers after 3 attempts")
+        );
+    }
+
+    #[test]
+    fn query_sizing_errors_are_preserved_without_retry() {
+        for code in [ERROR_INSUFFICIENT_BUFFER, ERROR_ACCESS_DENIED] {
+            let mut size_calls = 0;
+            let result = query_with_retry(
+                |_, _| {
+                    size_calls += 1;
+                    code
+                },
+                |_, _, _, _| panic!("query must not run after a sizing error"),
+            );
+
+            assert!(matches!(result, Err(CcdError::BufferSizes(error)) if error == code));
+            assert_eq!(size_calls, 1);
+        }
+    }
+
+    #[test]
+    fn query_other_errors_are_preserved_without_retry() {
+        for code in [ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER] {
+            let mut size_calls = 0;
+            let mut query_calls = 0;
+            let result = query_with_retry(
+                |num_paths, num_modes| {
+                    size_calls += 1;
+                    (*num_paths, *num_modes) = (1, 1);
+                    0
+                },
+                |_, _, _, _| {
+                    query_calls += 1;
+                    code
+                },
+            );
+
+            assert!(matches!(result, Err(CcdError::Query(error)) if error == code));
+            assert_eq!((size_calls, query_calls), (1, 1));
+        }
+    }
+
+    #[test]
+    fn query_truncates_buffers_to_returned_counts() {
+        for (returned_paths, returned_modes) in [(2, 1), (0, 0)] {
+            let mut query_calls = 0;
+            let (paths, modes) = query_with_retry(
+                |num_paths, num_modes| {
+                    (*num_paths, *num_modes) = (3, 4);
+                    0
+                },
+                |num_paths, paths, num_modes, modes| {
+                    query_calls += 1;
+                    assert_eq!((*num_paths, *num_modes), (3, 4));
+                    assert_eq!((paths.len(), modes.len()), (3, 4));
+                    (*num_paths, *num_modes) = (returned_paths, returned_modes);
+                    0
+                },
+            )
+            .unwrap();
+
+            assert_eq!(query_calls, 1);
+            assert_eq!(paths.len(), returned_paths as usize);
+            assert_eq!(modes.len(), returned_modes as usize);
+        }
+    }
 
     #[test]
     fn display_config_json_roundtrips() {
@@ -500,6 +719,7 @@ mod tests {
                 adapter_id: Luid { low: 5, high: 0 },
                 payload: vec![7u8; 48],
             }],
+            path_monitors: Vec::new(),
             monitors: vec![MonitorInfo {
                 valid: true,
                 manufacture_id: 4142,

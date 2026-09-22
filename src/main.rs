@@ -5,6 +5,7 @@ mod ccd;
 mod config;
 mod ddc;
 mod hotkeys;
+mod persistence;
 mod profiles;
 mod tray;
 
