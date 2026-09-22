@@ -213,10 +213,6 @@ impl AppModel {
                     "DisplayPort 2",
                     "USB-C 1",
                     "USB-C 2",
-                    "VGA 1",
-                    "VGA 2",
-                    "DVI 1",
-                    "DVI 2",
                 ];
 
                 let mut input_section = cosmic::widget::settings::section()
@@ -248,7 +244,7 @@ impl AppModel {
                     )
                     .width(Length::Fixed(300.0))
                     .into(),
-                    None => widget::text::body("Retry reads to adjust").into(),
+                    None => widget::text::body("Refresh to adjust").into(),
                 };
                 let mut brightness_section =
                     cosmic::widget::settings::section().title("Brightness").add(
@@ -275,7 +271,7 @@ impl AppModel {
                     )
                     .width(Length::Fixed(300.0))
                     .into(),
-                    None => widget::text::body("Retry reads to adjust").into(),
+                    None => widget::text::body("Refresh to adjust").into(),
                 };
                 let mut contrast_section =
                     cosmic::widget::settings::section().title("Contrast").add(
@@ -288,7 +284,7 @@ impl AppModel {
                     )));
                 }
 
-                let mut content = widget::column::with_capacity(7)
+                let mut content = widget::column::with_capacity(6)
                     .push(header)
                     .push(resolution_label)
                     .push(input_section)
@@ -301,10 +297,6 @@ impl AppModel {
                         "Could not refresh monitor: {error}"
                     )));
                 }
-                content = content.push(
-                    widget::button::standard("Retry reads")
-                        .on_press(Message::RetryMonitor(monitor_id)),
-                );
                 widget::scrollable(content)
                     .width(Length::Fill)
                     .height(Length::Fill)

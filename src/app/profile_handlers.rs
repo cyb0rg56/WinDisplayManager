@@ -73,6 +73,7 @@ impl AppModel {
     }
 
     pub(super) fn request_delete_profile(&mut self, name: String) {
+        self.pending_hotkey_delete = None;
         self.pending_profile_delete = Some(name);
     }
 

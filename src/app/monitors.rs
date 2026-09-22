@@ -64,11 +64,6 @@ impl AppModel {
             .insert()
             .text("Profiles")
             .data::<Page>(Page::Profiles);
-        // Settings page
-        self.nav
-            .insert()
-            .text("Settings")
-            .data::<Page>(Page::Settings);
         self.nav.insert().text("About").data::<Page>(Page::About);
 
         // Activate first monitor

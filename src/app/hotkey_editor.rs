@@ -2,7 +2,7 @@ use super::AppModel;
 use super::{Message, Page, RecordingState};
 use crate::config::{
     ActionTarget, ActionType, AppConfig, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
-    MonitorTarget,
+    MonitorTarget, hotkey_headings,
 };
 use crate::ddc::{InputSource, MonitorKey, PowerMode};
 use crate::hotkeys::HotkeyManager;
@@ -337,7 +337,29 @@ impl AppModel {
         }
     }
 
+    pub(super) fn request_delete_hotkey(&mut self, id: String) {
+        self.pending_profile_delete = None;
+        self.pending_hotkey_delete = Some(id);
+    }
+
+    pub(super) fn cancel_delete_hotkey(&mut self) {
+        self.pending_hotkey_delete = None;
+    }
+
+    /// Card heading for `id`, matching the hotkey list. `None` when that hotkey is gone.
+    pub(super) fn hotkey_delete_title(&self, id: &str) -> Option<String> {
+        let headings = hotkey_headings(&self.config.hotkeys.hotkeys);
+        self.config
+            .hotkeys
+            .hotkeys
+            .iter()
+            .zip(headings)
+            .find(|(hotkey, _)| hotkey.id == id)
+            .map(|(_, heading)| heading.title)
+    }
+
     pub(super) fn delete_hotkey(&mut self, id: String) {
+        self.pending_hotkey_delete = None;
         self.config.hotkeys.hotkeys.retain(|hotkey| hotkey.id != id);
         self.clear_hotkey_drafts(&id);
         if self.expanded_hotkey.as_deref() == Some(&id) {

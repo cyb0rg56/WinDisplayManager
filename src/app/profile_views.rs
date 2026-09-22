@@ -47,8 +47,7 @@ impl AppModel {
             profiles = profiles.push(widget::text::body("No profiles saved yet."));
         }
         for name in &self.profiles {
-            let deleting = self.pending_profile_delete.as_deref() == Some(name.as_str());
-            let mut row = widget::row::with_capacity(5)
+            let row = widget::row::with_capacity(4)
                 .push(widget::text::body(name.clone()).width(Length::Fill))
                 .push(
                     widget::button::suggested("Apply")
@@ -58,23 +57,14 @@ impl AppModel {
                     widget::button::standard("Hotkey")
                         .on_press(Message::AddProfileHotkey(name.clone())),
                 )
-                .spacing(space_s)
-                .align_y(Alignment::Center);
-            if deleting {
-                row = row
-                    .push(widget::button::standard("Cancel").on_press(Message::CancelDeleteProfile))
-                    .push(
-                        widget::button::destructive("Confirm Delete")
-                            .on_press(Message::DeleteProfile(name.clone())),
-                    );
-            } else {
-                row = row.push(icons::icon_button(
+                .push(icons::icon_button(
                     AppIcon::Trash,
                     "Delete",
                     theme::Button::Destructive,
                     Message::RequestDeleteProfile(name.clone()),
-                ));
-            }
+                ))
+                .spacing(space_s)
+                .align_y(Alignment::Center);
             profiles = profiles.push(row);
         }
         let content = widget::column::with_capacity(4)

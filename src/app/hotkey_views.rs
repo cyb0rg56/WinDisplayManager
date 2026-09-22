@@ -35,19 +35,13 @@ impl AppModel {
             .push(widget::Space::new().width(Length::Fill))
             .spacing(space_s);
 
-        let save_label = if self.config_dirty {
-            "Save Configuration *"
-        } else {
-            "Save Configuration"
-        };
-        let content = widget::column::with_capacity(6)
+        let content = widget::column::with_capacity(5)
             .push(widget::text::title3("Hotkeys"))
             .push(widget::text::body(
                 "Configure global hotkeys and ordered display actions.",
             ))
             .push(add_row)
             .push(hotkeys)
-            .push(widget::button::suggested(save_label).on_press(Message::SaveConfig))
             .spacing(space_s)
             .width(Length::Fill);
 
@@ -94,7 +88,7 @@ impl AppModel {
                 AppIcon::Trash,
                 "Delete",
                 theme::Button::Destructive,
-                Message::DeleteHotkey(id.clone()),
+                Message::RequestDeleteHotkey(id.clone()),
             ))
             .spacing(space_s)
             .align_y(Alignment::Center);

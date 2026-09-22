@@ -1,16 +1,37 @@
 use super::{AppModel, Message};
 use cosmic::Element;
-use cosmic::iced::Length;
+use cosmic::iced::{Alignment, Length};
 use cosmic::widget;
 
 impl AppModel {
     pub(super) fn view_about(&self) -> Element<'_, Message> {
-        widget::scrollable(cosmic::widget::about(&self.about, |url| {
-            Message::OpenUrl(url.to_owned())
-        }))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        let space_s = cosmic::theme::spacing().space_s;
+        let config_path = widget::column::with_capacity(2)
+            .push(widget::text::caption("Configuration file"))
+            .push(
+                widget::row::with_capacity(2)
+                    .push(
+                        widget::text_input("", &self.config_path)
+                            .on_input(|_| Message::ConfigPathInput)
+                            .width(Length::Fill),
+                    )
+                    .push(widget::button::standard("Copy").on_press(Message::CopyConfigPath))
+                    .spacing(space_s)
+                    .align_y(Alignment::Center),
+            )
+            .spacing(space_s)
+            .width(Length::Fill);
+        let content = widget::column::with_capacity(2)
+            .push(cosmic::widget::about(&self.about, |url| {
+                Message::OpenUrl(url.to_owned())
+            }))
+            .push(config_path)
+            .spacing(space_s)
+            .width(Length::Fill);
+        widget::scrollable(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     pub(super) fn view_config_recovery(&self) -> Element<'_, Message> {
