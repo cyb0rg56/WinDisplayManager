@@ -1,6 +1,6 @@
 [package]
 name = "windisplaymanager_rs"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Windows Display Manager - DDC/CI monitor control with GUI"
 license = "MIT"
