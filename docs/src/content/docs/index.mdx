@@ -1,0 +1,51 @@
+---
+title: WinDisplayManager
+description: DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles.
+template: splash
+hero:
+  title: WinDisplayManager
+  tagline: DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles, all from a native GUI.
+  image:
+    alt: WinDisplayManager logo
+    file: ../../assets/logo.svg
+  actions:
+    - text: Download for Windows
+      link: https://github.com/cyb0rg56/WinDisplayManager/releases/latest
+      icon: external
+      variant: primary
+    - text: Hotkeys guide
+      link: /WinDisplayManager/docs/hotkeys/
+      icon: right-arrow
+---
+
+[![Build status](https://github.com/cyb0rg56/WinDisplayManager/actions/workflows/rust.yml/badge.svg)](https://github.com/cyb0rg56/WinDisplayManager/actions/workflows/rust.yml)
+[![Latest release](https://img.shields.io/github/v/release/cyb0rg56/WinDisplayManager)](https://github.com/cyb0rg56/WinDisplayManager/releases/latest)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/cyb0rg56/WinDisplayManager/blob/master/LICENSE)
+
+## Features
+
+- **Brightness & contrast control** over DDC/CI, per monitor.
+- **Input source switching** with a click or a hotkey.
+- **Power mode control** to put a monitor to sleep or wake it from the app.
+- **Global hotkeys** with configurable *action chains* — one shortcut can run several actions at once (set or offset brightness/contrast, switch inputs, change power mode, write custom DDC/CI VCP codes, apply a profile, or turn displays off), each targeting all displays or specific monitors. Configurable entirely in-app.
+- **Display profiles** to save and restore whole monitor layouts (resolution, position, orientation) via Windows CCD, and switch between them instantly or with a hotkey.
+- **System tray integration** that lives quietly in the tray, always one click away.
+- **Native GUI** built with [libcosmic](https://github.com/pop-os/libcosmic)/[iced](https://github.com/iced-rs/iced).
+
+## Screenshots
+
+Screenshots coming soon.
+
+## Getting started
+
+1. **Download** the latest `windisplaymanager_rs-*.exe` from the [Releases page](https://github.com/cyb0rg56/WinDisplayManager/releases/latest).
+2. **Run it** — it's a single portable executable, no installer needed.
+   > Since the executable isn't code-signed, Windows SmartScreen may warn you on first run. Click **More info → Run anyway** to proceed.
+3. Your monitors are **detected automatically**. Adjust brightness, contrast, input, and power mode right from the Monitor page.
+4. Head to **Hotkeys** to create global hotkeys, or **Profiles** to save your current display layout for quick recall later.
+
+## Documentation
+
+- [Hotkeys guide](/docs/hotkeys/) — how hotkey recording and config work.
+- [Profiles guide](/docs/profiles/) — how display profiles are stored and applied.
+- [Testing](/docs/testing/) — automated gates, the manual hardware checklist, and how to tag a release.

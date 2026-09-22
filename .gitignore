@@ -1,5 +1,9 @@
 /target
 
+docs/node_modules/
+docs/dist/
+docs/.astro/
+
 # Code-signing / test certificate material — never commit private keys
 *.pfx
 *.cer
