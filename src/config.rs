@@ -609,6 +609,13 @@ pub struct AppConfig {
     /// Behavior for `ActionType::Off` actions ("Turn Off Displays").
     #[serde(default)]
     pub turn_off_behavior: TurnOffBehavior,
+    /// Register a per-user Run key so the app launches at sign-in.
+    #[serde(default)]
+    pub start_with_windows: bool,
+    /// When starting with Windows, pass `--minimized` so the first window stays in the tray.
+    /// Kept when `start_with_windows` is off so turning startup back on restores the choice.
+    #[serde(default)]
+    pub start_minimized: bool,
 }
 
 fn default_hotkeys_enabled() -> bool {
@@ -623,6 +630,8 @@ impl Default for AppConfig {
             refresh_interval_secs: 0,
             hotkeys_enabled: true,
             turn_off_behavior: TurnOffBehavior::default(),
+            start_with_windows: false,
+            start_minimized: false,
         }
     }
 }
@@ -880,6 +889,21 @@ mod tests {
     use super::*;
     use crate::persistence::{backup_path, tests::TestDir};
     use std::fs;
+
+    #[test]
+    fn startup_flags_default_off_when_missing_from_saved_config() {
+        let defaults = AppConfig::default();
+        assert!(!defaults.start_with_windows);
+        assert!(!defaults.start_minimized);
+
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("start_with_windows");
+        object.remove("start_minimized");
+        let config = AppConfig::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(!config.start_with_windows);
+        assert!(!config.start_minimized);
+    }
 
     #[test]
     fn load_outcomes_distinguish_missing_loaded_and_io_failure() {

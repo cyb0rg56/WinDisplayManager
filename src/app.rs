@@ -22,6 +22,7 @@ use crate::config::{
 use crate::ddc::{InputSource, MonitorInfo, MonitorKey, MonitorState, PowerMode};
 use crate::hotkeys::{self, HotkeyManager};
 use crate::persistence::LoadOutcome;
+use crate::startup;
 use crate::tray::{SystemTray, TrayMessage, TrayStream};
 use cosmic::iced::event::{self, Event};
 use cosmic::iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
@@ -103,6 +104,8 @@ pub enum Message {
     RebindMonitorTarget(String, usize, MonitorTarget, MonitorKey),
     RemoveMonitorTarget(String, usize, MonitorTarget),
     SetTurnOffBehavior(TurnOffBehavior),
+    ToggleStartWithWindows(bool),
+    ToggleStartMinimized(bool),
     SaveConfig,
     RetryConfig,
     RecoverConfigBackup,
@@ -228,6 +231,13 @@ impl cosmic::Application for AppModel {
                 AppConfig::recovery_placeholder()
             }
         };
+        // Keep the Run key aligned with saved settings. Skip recovery placeholders
+        // so a failed load cannot delete a registration the user already chose.
+        if config_store.recovery_error().is_none() {
+            if let Err(error) = startup::apply(config.start_with_windows, config.start_minimized) {
+                log::warn!("Failed to sync Windows startup registration: {error}");
+            }
+        }
 
         // Set up hotkey manager
         let hotkey_manager = HotkeyManager::new(&config);
@@ -419,6 +429,8 @@ impl cosmic::Application for AppModel {
                     | Message::RebindMonitorTarget(_, _, _, _)
                     | Message::RemoveMonitorTarget(_, _, _)
                     | Message::SetTurnOffBehavior(_)
+                    | Message::ToggleStartWithWindows(_)
+                    | Message::ToggleStartMinimized(_)
                     | Message::AddProfileHotkey(_)
             )
         {
@@ -510,6 +522,12 @@ impl cosmic::Application for AppModel {
             Message::SetTurnOffBehavior(behavior) => {
                 self.config.turn_off_behavior = behavior;
                 self.config_dirty = true;
+            }
+            Message::ToggleStartWithWindows(enabled) => {
+                return self.set_windows_startup(enabled, self.config.start_minimized);
+            }
+            Message::ToggleStartMinimized(minimized) => {
+                return self.set_windows_startup(self.config.start_with_windows, minimized);
             }
 
             Message::SaveConfig => return self.save_config(),
