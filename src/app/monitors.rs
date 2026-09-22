@@ -84,7 +84,7 @@ impl AppModel {
         &mut self,
         generation: u64,
         key: MonitorKey,
-        mut state: Box<MonitorState>,
+        mut state: MonitorState,
     ) -> cosmic::app::Task<Message> {
         if generation != self.monitor_generation {
             return cosmic::app::Task::none();
@@ -99,9 +99,9 @@ impl AppModel {
         self.monitor_load_errors.remove(&info.id);
         // Upsert
         if let Some(existing) = self.monitors.iter_mut().find(|m| m.info.key == key) {
-            *existing = *state;
+            *existing = state;
         } else {
-            self.monitors.push(*state);
+            self.monitors.push(state);
         }
         self.monitors.sort_by_key(|m| m.info.id);
         cosmic::app::Task::none()

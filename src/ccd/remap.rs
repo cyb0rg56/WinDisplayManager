@@ -118,12 +118,12 @@ pub(super) fn validate_layout(paths: &[PathInfo], modes: &[ModeInfo]) -> Result<
                 )));
             }
         }
-        if let Some(index) = sources.insert(source(path), path.source.mode_info_idx) {
-            if index != path.source.mode_info_idx {
-                return Err(invalid(
-                    "cloned paths must reference the same source mode index",
-                ));
-            }
+        if let Some(index) = sources.insert(source(path), path.source.mode_info_idx)
+            && index != path.source.mode_info_idx
+        {
+            return Err(invalid(
+                "cloned paths must reference the same source mode index",
+            ));
         }
     }
     Ok(())
@@ -144,13 +144,13 @@ fn saved_monitor(saved: &DisplayConfig, index: usize) -> Result<MonitorInfo> {
         .monitors
         .get(saved.paths[index].target.mode_info_idx as usize)
         .filter(|m| identity(m).is_some());
-    if let (Some(a), Some(b)) = (per_path, legacy) {
-        if identity(a) != identity(b) {
-            return Err(invalid(format!(
-                "path {} has conflicting saved monitor identities",
-                index + 1
-            )));
-        }
+    if let (Some(a), Some(b)) = (per_path, legacy)
+        && identity(a) != identity(b)
+    {
+        return Err(invalid(format!(
+            "path {} has conflicting saved monitor identities",
+            index + 1
+        )));
     }
     per_path.or(legacy).cloned().ok_or_else(|| CcdError::Remap(format!(
         "saved path {} has no valid monitor device path; this older or incomplete profile must be recaptured after arranging the displays in Windows", index + 1

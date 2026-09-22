@@ -2,8 +2,8 @@ use super::debounce::{SliderDebounce, SliderFeature};
 use super::{AppModel, HardwareJob, INPUT_SOURCES, Message};
 use crate::ddc::InputSource;
 use cosmic::Element;
-use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::Length;
+use cosmic::iced::alignment::Horizontal;
 use cosmic::widget;
 
 pub(super) fn input_source_index(source: &InputSource) -> Option<usize> {

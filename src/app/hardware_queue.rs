@@ -108,7 +108,7 @@ impl AppModel {
                     format!("Discovery failed; dependent jobs canceled. Retry refresh: {error}");
             }
             QueueEvent::Read(key, Ok(state)) => {
-                follow_up.push(self.monitor_state_loaded(self.monitor_generation, key, state));
+                follow_up.push(self.monitor_state_loaded(self.monitor_generation, key, *state));
             }
             QueueEvent::Read(key, Err(error)) => {
                 follow_up.push(self.monitor_state_failed(self.monitor_generation, key, error));
