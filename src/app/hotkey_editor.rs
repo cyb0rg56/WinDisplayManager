@@ -414,10 +414,10 @@ impl AppModel {
     }
 
     pub(super) fn delete_action(&mut self, id: String, idx: usize) {
-        if let Some(hotkey) = self.hotkey_mut(&id) {
-            if idx < hotkey.actions.len() {
-                hotkey.actions.remove(idx);
-            }
+        if let Some(hotkey) = self.hotkey_mut(&id)
+            && idx < hotkey.actions.len()
+        {
+            hotkey.actions.remove(idx);
         }
         self.clear_hotkey_drafts(&id);
         self.initialize_hotkey_drafts(&id);
@@ -572,11 +572,11 @@ impl AppModel {
             self.status_message = error;
             return;
         }
-        if let Some(action) = self.action_mut(&id, idx) {
-            if let Err(error) = action.rebind_target(&old, key) {
-                self.status_message = error;
-                return;
-            }
+        if let Some(action) = self.action_mut(&id, idx)
+            && let Err(error) = action.rebind_target(&old, key)
+        {
+            self.status_message = error;
+            return;
         }
         self.config_dirty = true;
         self.refresh_hotkey_actions();

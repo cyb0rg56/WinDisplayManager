@@ -10,8 +10,9 @@
     * Properties/PublisherDisplayName -> "Publisher display name"
 
   Identity/@Version is a placeholder (0.0.0.0). It is injected at build time
-  from the Cargo.toml version (local) or the git tag (CI). The Store reserves
-  the 4th octet, so it must always be x.y.z.0.
+  from the Cargo.toml version plus ".0". A GitHub Release tag must be "v" plus
+  that same three-part version. The Store reserves the 4th octet, so it must
+  always be x.y.z.0.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"

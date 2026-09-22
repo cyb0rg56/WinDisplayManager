@@ -14,19 +14,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  validate:
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+    - name: Install Rust format and lint components
+      run: rustup component add rustfmt clippy
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+    - name: Clippy
+      run: cargo clippy --locked --all-targets -- -D warnings
+    - name: Test
+      run: cargo test --locked --verbose
+    - name: Build release
+      run: cargo build --release --locked --verbose
+    - name: Build unsigned MSIX
+      shell: pwsh
+      run: ./packaging/msix/build-msix.ps1
+    - name: Stage release artifacts
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path dist | Out-Null
+        Copy-Item target/release/windisplaymanager_rs.exe dist/
+        Copy-Item packaging/msix/obj/*.msix dist/
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-package
+        path: dist/
+        if-no-files-found: error
 
   release:
-    needs: build
+    needs: validate
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     permissions:
@@ -34,25 +54,30 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build release
-      run: cargo build --release --verbose
-    - name: Rename binary
+    - name: Require the tag to match Cargo.toml
       shell: pwsh
       run: |
-        Copy-Item target/release/windisplaymanager_rs.exe windisplaymanager_rs-${{ github.ref_name }}.exe
-    - name: Build MSIX package
-      shell: pwsh
-      run: |
-        $ver = "${{ github.ref_name }}".TrimStart('v')
-        ./packaging/msix/build-msix.ps1 -Version "$ver.0"
-    - name: Upload MSIX artifact
-      uses: actions/upload-artifact@v4
+        $tag = "${{ github.ref_name }}".TrimStart('v')
+        $cargo = Get-Content Cargo.toml -Raw
+        if ($cargo -notmatch '(?m)^\s*version\s*=\s*"([^"]+)"') {
+          throw "Could not parse version from Cargo.toml"
+        }
+        $version = $Matches[1]
+        if ($version -ne $tag) {
+          throw "Tag v$tag does not match Cargo.toml version $version"
+        }
+    - name: Download validated artifacts
+      uses: actions/download-artifact@v4
       with:
-        name: msix-package
-        path: packaging/msix/obj/*.msix
-        if-no-files-found: error
+        name: release-package
+        path: dist
+    - name: Name the published executable
+      shell: pwsh
+      run: |
+        Copy-Item dist/windisplaymanager_rs.exe "dist/windisplaymanager_rs-${{ github.ref_name }}.exe"
+        Remove-Item dist/windisplaymanager_rs.exe
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: windisplaymanager_rs-${{ github.ref_name }}.exe
+        files: dist/*
         generate_release_notes: true

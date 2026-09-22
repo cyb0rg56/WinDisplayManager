@@ -49,5 +49,6 @@ title: WinDisplayManager
 
 - [Hotkeys guide]({{ site.baseurl }}/docs/hotkeys/) — how hotkey recording and config work.
 - [Profiles guide]({{ site.baseurl }}/docs/profiles/) — how display profiles are stored and applied.
+- [Testing]({{ site.baseurl }}/docs/testing/) — automated gates, the manual hardware checklist, and how to tag a release.
 
 {% include footer.html %}

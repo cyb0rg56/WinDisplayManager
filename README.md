@@ -42,10 +42,13 @@ cargo build --release
 
 The binary is produced at `target/release/windisplaymanager_rs.exe`.
 
+To publish a GitHub Release, tag `v` plus the `Cargo.toml` version and push that tag. The steps are in the [testing runbook](https://cyb0rg56.github.io/WinDisplayManager/docs/testing/).
+
 ## Documentation
 
 - [Hotkeys guide](https://cyb0rg56.github.io/WinDisplayManager/docs/hotkeys/)
 - [Profiles guide](https://cyb0rg56.github.io/WinDisplayManager/docs/profiles/)
+- [Testing](https://cyb0rg56.github.io/WinDisplayManager/docs/testing/)
 - [Privacy policy](https://cyb0rg56.github.io/WinDisplayManager/privacy/)
 
 ## License

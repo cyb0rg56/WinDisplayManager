@@ -233,10 +233,10 @@ impl cosmic::Application for AppModel {
         };
         // Keep the Run key aligned with saved settings. Skip recovery placeholders
         // so a failed load cannot delete a registration the user already chose.
-        if config_store.recovery_error().is_none() {
-            if let Err(error) = startup::apply(config.start_with_windows, config.start_minimized) {
-                log::warn!("Failed to sync Windows startup registration: {error}");
-            }
+        if config_store.recovery_error().is_none()
+            && let Err(error) = startup::apply(config.start_with_windows, config.start_minimized)
+        {
+            log::warn!("Failed to sync Windows startup registration: {error}");
         }
 
         // Set up hotkey manager
@@ -345,10 +345,8 @@ impl cosmic::Application for AppModel {
 
     // Intercept window surface close (e.g. Alt+F4) → hide to tray
     fn on_close_requested(&self, id: window::Id) -> Option<Self::Message> {
-        if self.tray.is_some() {
-            if self.core.main_window_id().is_some_and(|main| main == id) {
-                return Some(Message::HideWindow);
-            }
+        if self.tray.is_some() && self.core.main_window_id().is_some_and(|main| main == id) {
+            return Some(Message::HideWindow);
         }
         None
     }
