@@ -217,17 +217,6 @@ impl AppModel {
         self.enqueue_hardware_jobs([super::HardwareJob::SetContrast { monitor_id, value }])
     }
 
-    pub(super) fn select_input_source(
-        &mut self,
-        monitor_id: u32,
-        idx: usize,
-    ) -> cosmic::app::Task<Message> {
-        if let Some(&source) = super::INPUT_SOURCES.get(idx) {
-            return self.update(Message::SetInputSource(monitor_id, source));
-        }
-        cosmic::app::Task::none()
-    }
-
     pub(super) fn set_input_source(
         &mut self,
         monitor_id: u32,
