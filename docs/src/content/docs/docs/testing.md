@@ -43,10 +43,12 @@ the version tag is pushed.
 
 ## Tagging a release
 
-Publication happens only when an annotated tag is pushed. The tag must be
-`v` plus the three-part `version` already committed in `Cargo.toml` on that
-same commit. For the current package version that tag is `v0.1.4`. A tag such
-as `v0.1.4.0` does not match and the release job fails.
+Publication happens when a tag matching `v*.*.*` is pushed. Use an annotated
+tag; the workflow does not enforce this, but it keeps the release author and
+message with the tag. The tag must be `v` plus the three-part `version` already
+committed in `Cargo.toml` on that same commit. For the current package version
+that tag is `v0.1.5`. A tag such as `v0.1.5.0` does not match and the release
+job fails.
 
 1. On `main`, set `version` in `Cargo.toml` to `x.y.z`. Run a Cargo command
    such as `cargo check` so `Cargo.lock` records the same version, then commit
@@ -58,11 +60,11 @@ as `v0.1.4.0` does not match and the release job fails.
 ```powershell
 git checkout main
 git pull
-git tag -a v0.1.4 -m "WinDisplayManager 0.1.4"
-git push origin v0.1.4
+git tag -a v0.1.5 -m "WinDisplayManager 0.1.5"
+git push origin v0.1.5
 ```
 
-Replace `0.1.4` with the version you committed. The tag has to point at the
+Replace `0.1.5` with the version you committed. The tag has to point at the
 commit that contains that `Cargo.toml` version.
 
 Pushing the tag is the release gate. It runs the same formatting, Clippy, and
@@ -72,8 +74,8 @@ unsigned MSIX. If that passes, the release job checks the tag against
 or sign them.
 The GitHub Release receives:
 
-- `windisplaymanager_rs-v0.1.4.exe`
-- unsigned `windisplaymanager_rs-0.1.4.0.msix` (the fourth part is always `.0`)
+- `windisplaymanager_rs-v0.1.5.exe`
+- unsigned `windisplaymanager_rs-0.1.5.0.msix` (the fourth part is always `.0`)
 - generated release notes
 
 The executable and MSIX are unsigned, so SmartScreen can warn on the
@@ -90,8 +92,8 @@ with the panel, record the model, connection, operation, and raw reply.
 Unsupported or ambiguous configurations should fail with an explicit error
 rather than guess a target.
 
-- With the AW2725QF explicitly on DisplayPort 1, compare **Retry reads** and **Refresh** with its on-screen input indication.
-- With the DELL U2723QE explicitly on HDMI 1, verify **Retry reads** and **Refresh** show **HDMI 1**.
+- With the AW2725QF explicitly on DisplayPort 1, compare **Refresh** (and **Retry**, when a monitor page shows it) with its on-screen input indication.
+- With the DELL U2723QE explicitly on HDMI 1, verify **Refresh** (and **Retry**, when shown) reports **HDMI 1**.
 - Adjust brightness and contrast rapidly and switch between monitor pages. The final requested values must reach the intended displays.
 - Refresh while changes are queued. Cancellation must be safe and the UI must stay responsive.
 - Test a disconnected or DDC-unresponsive display. Errors must be visible, working features must stay independent, and retry must be able to recover.
@@ -104,6 +106,9 @@ rather than guess a target.
 - Smoke-test tray reopening, hotkeys, and application exit after queue activity.
 
 ## Known limitations
+
+User-facing symptoms and workarounds for these limitations are in
+[Troubleshooting](/docs/troubleshooting/).
 
 - Windows device paths identify device instances. They are not immutable physical identities across every port, dock, or driver change. A path change requires recapture or rebind.
 - Ambiguous one-to-many physical associations are unsupported. Discovery fails for the whole snapshot instead of guessing from the model name.

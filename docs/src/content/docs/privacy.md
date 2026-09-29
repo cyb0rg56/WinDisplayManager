@@ -3,22 +3,26 @@ title: Privacy Policy
 description: WinDisplayManager collects nothing and sends nothing over the network.
 ---
 
-_Last updated: 2026-07-22_
+_Last updated: 2026-09-29_
 
 ## The short version
 
 **WinDisplayManager collects nothing and sends nothing over the network.**
-There is no telemetry, no analytics, no crash reporting, and no network code
-in the application at all — this has been verified by reviewing the source
-and its dependencies.
+There is no telemetry, no analytics, and no crash reporting. The application's
+own code makes no network requests.
 
 ## What the app does locally
 
 Everything WinDisplayManager reads or writes stays on your own machine:
 
 - **Hotkey configuration**: Your global hotkey bindings and settings are
-  saved as JSON at `%APPDATA%\windisplaymanager\config.json`. See the
-  [Hotkeys guide](/docs/hotkeys/).
+  saved as JSON at `%APPDATA%\windisplaymanager\config.json`, with a
+  `config.json.bak` backup of the previous version. See
+  [Configuration & recovery](/docs/configuration/).
+- **Start with Windows**: If enabled, the app writes a single
+  `WindowsDisplayManager` value under
+  `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`. See
+  [Settings & startup](/docs/settings/).
 - **Display profiles**: Saved monitor layouts are stored as JSON files
   under `%APPDATA%\MonitorSwitcher\Profiles\`. See the
   [Profiles guide](/docs/profiles/).
@@ -40,8 +44,8 @@ advertising in the application itself.
 This site is a static page hosted on GitHub Pages. WinDisplayManager (the
 project) does not add its own analytics or tracking scripts to this site.
 GitHub's own hosting infrastructure may collect standard web server logs as
-described in [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) —
-that collection is GitHub's, not ours.
+described in [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+That collection is GitHub's, not ours.
 
 ## Changes to this policy
 

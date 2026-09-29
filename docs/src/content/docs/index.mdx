@@ -1,10 +1,10 @@
 ---
 title: WinDisplayManager
-description: DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles.
+description: "DDC/CI monitor control for Windows: brightness, contrast, input switching, power mode, hotkeys, and display profiles."
 template: splash
 hero:
   title: WinDisplayManager
-  tagline: DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles, all from a native GUI.
+  tagline: "DDC/CI monitor control for Windows: brightness, contrast, input switching, power mode, hotkeys, and display profiles, all from a native GUI."
   image:
     alt: WinDisplayManager logo
     file: ../../assets/logo.svg
@@ -25,11 +25,11 @@ hero:
 ## Features
 
 - **Brightness & contrast control** over DDC/CI, per monitor.
-- **Input source switching** with a click or a hotkey.
-- **Power mode control** to put a monitor to sleep or wake it from the app.
-- **Global hotkeys** with configurable *action chains* — one shortcut can run several actions at once (set or offset brightness/contrast, switch inputs, change power mode, write custom DDC/CI VCP codes, apply a profile, or turn displays off), each targeting all displays or specific monitors. Configurable entirely in-app.
+- **Input source switching** from the monitor page or a hotkey, using the inputs each monitor advertises.
+- **Power mode control** to put monitors into standby or turn them off with a hotkey, or sleep all displays from the tray.
+- **Global hotkeys** with configurable *action chains*: one shortcut can run several actions at once (set or offset brightness/contrast, switch inputs, change power mode, write custom DDC/CI VCP codes, apply a profile, or turn displays off), each targeting all displays or specific monitors. Configurable entirely in-app.
 - **Display profiles** to save and restore whole monitor layouts (resolution, position, orientation) via Windows CCD, and switch between them instantly or with a hotkey.
-- **System tray integration** that lives quietly in the tray, always one click away.
+- **System tray integration**: closing the window keeps the app in the tray, with quick access to profiles and turning displays off. Optionally starts with Windows.
 - **Native GUI** built with [libcosmic](https://github.com/pop-os/libcosmic)/[iced](https://github.com/iced-rs/iced).
 
 ## Screenshots
@@ -39,13 +39,18 @@ Screenshots coming soon.
 ## Getting started
 
 1. **Download** the latest `windisplaymanager_rs-*.exe` from the [Releases page](https://github.com/cyb0rg56/WinDisplayManager/releases/latest).
-2. **Run it** — it's a single portable executable, no installer needed.
+2. **Run it.** It's a single portable executable, no installer needed.
    > Since the executable isn't code-signed, Windows SmartScreen may warn you on first run. Click **More info → Run anyway** to proceed.
-3. Your monitors are **detected automatically**. Adjust brightness, contrast, input, and power mode right from the Monitor page.
-4. Head to **Hotkeys** to create global hotkeys, or **Profiles** to save your current display layout for quick recall later.
+3. Your monitors are **detected automatically**, one page per monitor. Adjust brightness, contrast, and input source from each [monitor page](/docs/monitors/). If a monitor doesn't respond, make sure DDC/CI is enabled in its on-screen menu.
+4. Head to **Hotkeys** to create global hotkeys (including power mode actions), or **Profiles** to save your current display layout for quick recall later.
+5. Open **Settings** (gear icon in the header) to start with Windows or choose how displays are turned off.
 
 ## Documentation
 
-- [Hotkeys guide](/docs/hotkeys/) — how hotkey recording and config work.
-- [Profiles guide](/docs/profiles/) — how display profiles are stored and applied.
-- [Testing](/docs/testing/) — automated gates, the manual hardware checklist, and how to tag a release.
+- [Monitors guide](/docs/monitors/): monitor pages, DDC/CI, and input sources.
+- [Hotkeys guide](/docs/hotkeys/): how hotkey recording and config work.
+- [Profiles guide](/docs/profiles/): how display profiles are stored and applied.
+- [Settings & startup](/docs/settings/): startup, global hotkeys, power-off method, and the tray menu.
+- [Configuration & recovery](/docs/configuration/): where settings live and how to recover a damaged file.
+- [Troubleshooting](/docs/troubleshooting/): common problems and FAQ.
+- [Testing](/docs/testing/): automated gates, the manual hardware checklist, and how to tag a release.
