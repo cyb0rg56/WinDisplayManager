@@ -15,7 +15,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$IconPath = (Join-Path $PSScriptRoot '..\..\icon.ico'),
+    [string]$IconPath = (Join-Path $PSScriptRoot '..\..\resources\icons\icon.ico'),
     [string]$OutDir   = (Join-Path $PSScriptRoot 'Assets')
 )
 

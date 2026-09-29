@@ -1,4 +1,4 @@
-const ICON: &str = "icon.ico";
+const ICON: &str = "resources/icons/icon.ico";
 const MANIFEST: &str = "resources/app.manifest";
 
 fn main() -> std::io::Result<()> {
