@@ -3,8 +3,8 @@ title: Profiles
 description: How WinDisplayManager display profiles are stored and applied.
 ---
 
-A **profile** is a saved snapshot of your monitor layout — which displays are
-enabled, their resolution, position, and orientation — captured via the
+A **profile** is a saved snapshot of your monitor layout (which displays are
+enabled, their resolution, position, and orientation), captured via the
 Windows CCD (Connecting and Configuring Displays) API. Profiles let you flip
 between layouts (e.g. "Docked", "Laptop only", "Presentation") in one click or
 a single hotkey.
@@ -15,19 +15,24 @@ a single hotkey.
    settings or your dock/monitor switch).
 2. Open the **Profiles** page in WinDisplayManager, enter a name in the
    **New profile name** box, and click **Save Current Layout**.
-3. The name becomes the filename, so avoid characters that aren't valid in
-   Windows filenames (`< > : " / \ | ? *`); the app will strip/reject invalid
-   names automatically.
+3. The name becomes the filename. Characters that aren't valid in Windows
+   filenames (`< > : " / \ | ? *`) and control characters are removed, along
+   with leading/trailing spaces and dots. If nothing usable is left (for
+   example a name made only of dots), the profile is not saved.
 
-If that profile already exists, the app asks you to confirm **Replace** before
-capturing and overwriting it.
+If a profile with the cleaned-up name already exists, the app asks you to
+confirm **Replace** before capturing and overwriting it.
+
+You can also choose **Save Current Layout…** from the tray menu, which opens
+the Profiles page. Delete a profile with **Delete** (you are asked to confirm).
 
 ## Applying a profile
 
-Click **Apply** next to a saved profile to apply it immediately. To bind a
-profile to a global hotkey, click **Hotkey** next to it — this adds a
+Click **Apply** next to a saved profile to apply it immediately, or pick it
+from **Load Profile** in the tray menu. To bind a
+profile to a global hotkey, click **Hotkey** next to it. This adds a
 matching *Apply Profile* hotkey on the [Hotkeys page](/docs/hotkeys/)
-and jumps there so you can record a key combination — letting you switch
+and jumps there so you can record a key combination, letting you switch
 layouts without opening the app.
 
 ## Safe matching and limitations

@@ -198,29 +198,11 @@ impl Hash for TrayId {
     }
 }
 
-/// Create the tray icon from the embedded ICO file.
+/// Load the tray icon from the executable's icon resource (ID 1, embedded by build.rs).
 fn create_tray_icon() -> Result<tray_icon::Icon, tray_icon::BadIcon> {
-    // Embed the ICO file at compile time
-    static ICON_DATA: &[u8] = include_bytes!("../icon.ico");
-
-    log::debug!(
-        "Creating tray icon, embedded data size: {} bytes",
-        ICON_DATA.len()
-    );
-
-    // Write to temp file since tray_icon can load ICO from path
-    let temp_path = std::env::temp_dir().join("windisplaymanager_icon.ico");
-    std::fs::write(&temp_path, ICON_DATA).map_err(|e| {
-        log::error!("Failed to write temp icon file: {e}");
-        tray_icon::BadIcon::OsError(e)
-    })?;
-
-    log::debug!("Wrote temp icon to: {}", temp_path.display());
-
-    let result = tray_icon::Icon::from_path(&temp_path, None);
-    match &result {
-        Ok(_) => log::debug!("Tray icon loaded successfully"),
-        Err(e) => log::error!("Failed to load tray icon: {e:?}"),
+    let result = tray_icon::Icon::from_resource(1, None);
+    if let Err(e) = &result {
+        log::error!("Failed to load tray icon: {e:?}");
     }
     result
 }

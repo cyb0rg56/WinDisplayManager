@@ -231,12 +231,18 @@ fn apply_config_with(
 pub fn turn_off_monitors() {
     std::thread::sleep(std::time::Duration::from_millis(500));
     // SAFETY: PostMessageW with a broadcast handle and plain integer parameters.
-    unsafe {
-        let _ = PostMessageW(
+    let posted = unsafe {
+        PostMessageW(
             HWND_BROADCAST,
             WM_SYSCOMMAND,
             SC_MONITORPOWER as usize,
             2isize,
+        )
+    };
+    if posted == 0 {
+        log::warn!(
+            "Monitor power-off broadcast failed: {}",
+            std::io::Error::last_os_error()
         );
     }
 }

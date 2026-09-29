@@ -42,7 +42,7 @@ export default defineConfig({
     starlight({
       title: 'WinDisplayManager',
       description:
-        'DDC/CI monitor control for Windows — brightness, contrast, input switching, power mode, hotkeys, and display profiles.',
+        'DDC/CI monitor control for Windows: brightness, contrast, input switching, power mode, hotkeys, and display profiles.',
       social: [
         {
           icon: 'github',
@@ -52,8 +52,12 @@ export default defineConfig({
       ],
       sidebar: [
         { label: 'Home', slug: 'index' },
+        { label: 'Monitors', slug: 'docs/monitors' },
         { label: 'Hotkeys', slug: 'docs/hotkeys' },
         { label: 'Profiles', slug: 'docs/profiles' },
+        { label: 'Settings & startup', slug: 'docs/settings' },
+        { label: 'Configuration & recovery', slug: 'docs/configuration' },
+        { label: 'Troubleshooting', slug: 'docs/troubleshooting' },
         { label: 'Testing', slug: 'docs/testing' },
         { label: 'Privacy', slug: 'privacy' },
       ],

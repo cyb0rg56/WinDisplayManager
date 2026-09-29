@@ -1,47 +1,18 @@
+use super::config_ops::ConfigOp;
 use super::{AppModel, Message};
 use crate::config::TurnOffBehavior;
-use crate::startup;
 use cosmic::Element;
 use cosmic::iced::Length;
 use cosmic::widget;
 
 impl AppModel {
     /// Persist startup settings and keep the per-user Run key in step.
-    ///
-    /// The registry is updated first. If saving config fails, the previous
-    /// registration is written back and the in-memory config is left unchanged.
     pub(super) fn set_windows_startup(
         &mut self,
         enabled: bool,
         minimized: bool,
     ) -> cosmic::app::Task<Message> {
-        let previous_enabled = self.config.start_with_windows;
-        let previous_minimized = self.config.start_minimized;
-        if let Err(error) = startup::apply(enabled, minimized) {
-            self.status_message = format!("Failed to update Windows startup: {error}");
-            return cosmic::app::Task::none();
-        }
-
-        let mut updated = self.config.clone();
-        updated.start_with_windows = enabled;
-        updated.start_minimized = minimized;
-        if let Err(error) = self.config_store.save(&updated) {
-            self.status_message = format!("Failed to save config: {error}");
-            if let Err(revert_error) = startup::apply(previous_enabled, previous_minimized) {
-                log::error!("Failed to restore Windows startup registration: {revert_error}");
-            }
-            return cosmic::app::Task::none();
-        }
-
-        self.config = updated;
-        self.status_message = if !enabled {
-            "Will not start with Windows".into()
-        } else if minimized {
-            "Will start with Windows, minimized to the tray".into()
-        } else {
-            "Will start with Windows".into()
-        };
-        cosmic::app::Task::none()
+        self.enqueue_config_op(ConfigOp::SetStartup { enabled, minimized })
     }
 
     /// Settings shown in the header context drawer.

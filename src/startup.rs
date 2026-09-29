@@ -4,6 +4,7 @@
 //! `--minimized` is added only when both startup toggles are on, so a normal launch
 //! always opens the window.
 
+use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 
@@ -17,13 +18,16 @@ pub fn launched_minimized() -> bool {
 }
 
 /// Quoted executable path, plus `--minimized` when requested.
-pub fn startup_command(exe: &Path, minimized: bool) -> String {
-    let quoted = quote_path(exe);
+/// Windows paths cannot contain `"`, so wrapping in quotes is sufficient.
+pub fn startup_command(exe: &Path, minimized: bool) -> OsString {
+    let mut command = OsString::from("\"");
+    command.push(exe.as_os_str());
+    command.push("\"");
     if minimized {
-        format!("{quoted} {MINIMIZED_ARG}")
-    } else {
-        quoted
+        command.push(" ");
+        command.push(MINIMIZED_ARG);
     }
+    command
 }
 
 /// Write or remove the Run value so it matches the saved startup settings.
@@ -33,11 +37,6 @@ pub fn startup_command(exe: &Path, minimized: bool) -> String {
 pub fn apply(enabled: bool, minimized: bool) -> io::Result<()> {
     let exe = std::env::current_exe()?;
     set_run_value(&exe, enabled, minimized)
-}
-
-fn quote_path(exe: &Path) -> String {
-    let path = exe.to_string_lossy().replace('"', "\\\"");
-    format!("\"{path}\"")
 }
 
 fn set_run_value(exe: &Path, enabled: bool, minimized: bool) -> io::Result<()> {

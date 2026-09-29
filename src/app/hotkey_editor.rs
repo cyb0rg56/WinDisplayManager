@@ -1,4 +1,5 @@
 use super::AppModel;
+use super::config_ops::ConfigOp;
 use super::{Message, Page, RecordingState};
 use crate::config::{
     ActionTarget, ActionType, AppConfig, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
@@ -6,7 +7,6 @@ use crate::config::{
 };
 use crate::ddc::{InputSource, MonitorKey, PowerMode};
 use crate::hotkeys::HotkeyManager;
-use crate::persistence::LoadOutcome;
 use cosmic::iced::keyboard::{Key, Modifiers};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -229,6 +229,10 @@ impl AppModel {
     pub(super) fn validate_action_drafts(&self) -> Option<String> {
         for hotkey in &self.config.hotkeys.hotkeys {
             for (idx, action) in hotkey.actions.iter().enumerate() {
+                // Off actions hide their value fields, so stale drafts cannot be corrected.
+                if action.action_type == ActionType::Off {
+                    continue;
+                }
                 if matches!(
                     action.target,
                     ActionTarget::Brightness | ActionTarget::Contrast | ActionTarget::CustomVcp
@@ -630,78 +634,35 @@ impl AppModel {
             self.status_message = error;
             return cosmic::app::Task::none();
         }
-        if let Err(e) = self.config_store.save(&self.config) {
-            self.status_message = format!("Failed to save config: {e}");
-        } else {
-            self.status_message = "Configuration saved and hotkeys activated.".into();
-            self.config_dirty = false;
-            self.refresh_hotkey_registration();
-        }
-        cosmic::app::Task::none()
+        self.enqueue_config_op(ConfigOp::Save)
     }
 
     pub(super) fn toggle_hotkeys(&mut self, enabled: bool) -> cosmic::app::Task<Message> {
-        match self
-            .config_store
-            .set_hotkeys_enabled(&mut self.config, enabled)
-        {
-            Ok(()) => {
-                self.status_message = if enabled {
-                    "Hotkeys enabled"
-                } else {
-                    "Hotkeys disabled"
-                }
-                .into();
-                self.refresh_hotkey_registration();
-            }
-            Err(error) => self.status_message = format!("Failed to save config: {error}"),
-        }
-        cosmic::app::Task::none()
+        self.enqueue_config_op(ConfigOp::SetHotkeysEnabled(enabled))
     }
 
-    pub(super) fn retry_config(&mut self) {
+    pub(super) fn retry_config(&mut self) -> cosmic::app::Task<Message> {
         self.pending_config_reset = false;
-        match self.config_store.retry() {
-            LoadOutcome::Loaded(config) => {
-                self.install_recovered_config(config, "Configuration reloaded.")
-            }
-            LoadOutcome::Missing => self.install_recovered_config(
-                AppConfig::default(),
-                "No configuration file found; using defaults.",
-            ),
-            LoadOutcome::Failed(error) => {
-                self.status_message = format!("Configuration still needs recovery: {error}")
-            }
-        }
+        self.enqueue_config_op(ConfigOp::Retry)
     }
 
-    pub(super) fn recover_config_backup(&mut self) {
+    pub(super) fn recover_config_backup(&mut self) -> cosmic::app::Task<Message> {
         self.pending_config_reset = false;
-        match self.config_store.recover_backup() {
-            Ok(config) => {
-                self.install_recovered_config(config, "Configuration restored from backup.")
-            }
-            Err(error) => self.status_message = format!("Could not recover backup: {error}"),
-        }
+        self.enqueue_config_op(ConfigOp::RecoverBackup)
     }
 
-    pub(super) fn confirm_reset_config(&mut self) {
+    pub(super) fn confirm_reset_config(&mut self) -> cosmic::app::Task<Message> {
         if !std::mem::take(&mut self.pending_config_reset)
             || self.config_store.recovery_error().is_none()
         {
-            return;
+            return cosmic::app::Task::none();
         }
-        match self.config_store.reset_confirmed() {
-            Ok(config) => self.install_recovered_config(
-                config,
-                "Configuration reset to defaults. Existing backup retained.",
-            ),
-            Err(error) => self.status_message = format!("Could not reset configuration: {error}"),
-        }
+        self.enqueue_config_op(ConfigOp::Reset)
     }
 
-    fn install_recovered_config(&mut self, config: AppConfig, status: &str) {
+    pub(super) fn install_recovered_config(&mut self, config: AppConfig, status: &str) {
         self.config = config;
+        self.config_path = self.config_store.path().display().to_string();
         self.config_dirty = false;
         self.recording_state = RecordingState::NotRecording;
         self.expanded_hotkey = None;

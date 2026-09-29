@@ -58,9 +58,10 @@ pub struct DisplayProfile {
 // ---------------------------------------------------------------------------
 
 /// Directory holding profile JSON files.
-pub fn profiles_dir() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("MonitorSwitcher").join("Profiles")
+pub fn profiles_dir() -> io::Result<PathBuf> {
+    Ok(persistence::config_base_dir()?
+        .join("MonitorSwitcher")
+        .join("Profiles"))
 }
 
 /// Strip characters invalid in Windows filenames and reject traversal/empty
@@ -81,7 +82,7 @@ fn sanitize_name(name: &str) -> Option<String> {
 
 fn profile_path(name: &str) -> Result<PathBuf> {
     let safe = sanitize_name(name).ok_or(ProfileError::InvalidName)?;
-    Ok(profiles_dir().join(format!("{safe}.json")))
+    Ok(profiles_dir()?.join(format!("{safe}.json")))
 }
 
 // ---------------------------------------------------------------------------
@@ -89,29 +90,32 @@ fn profile_path(name: &str) -> Result<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// List profile names (file stems of `*.json`), sorted.
-pub fn list_profiles() -> Vec<String> {
+pub fn list_profiles() -> io::Result<Vec<String>> {
+    list_profiles_in(&profiles_dir()?)
+}
+
+fn list_profiles_in(dir: &Path) -> io::Result<Vec<String>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut names = Vec::new();
-    if let Ok(entries) = fs::read_dir(profiles_dir()) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json")
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            {
-                names.push(stem.to_string());
-            }
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            names.push(stem.to_string());
         }
     }
     names.sort_unstable();
-    names
+    Ok(names)
 }
 
 /// Save a captured configuration as a named profile.
-pub fn profile_exists(name: &str) -> Result<bool> {
-    Ok(profile_path(name)?.exists())
-}
-
 pub fn save_profile(name: &str, config: &DisplayConfig, replace: bool) -> Result<()> {
-    save_profile_in(&profiles_dir(), name, config, replace)
+    save_profile_in(&profiles_dir()?, name, config, replace)
 }
 
 fn save_profile_in(dir: &Path, name: &str, config: &DisplayConfig, replace: bool) -> Result<()> {
@@ -159,13 +163,16 @@ pub fn load_profile(name: &str) -> Result<DisplayProfile> {
     }
 }
 
-/// Delete a profile by name.
+/// Delete a profile by name. Deleting a missing profile succeeds.
 pub fn delete_profile(name: &str) -> Result<()> {
-    let path = profile_path(name)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
+    remove_if_present(&profile_path(name)?)
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Load and apply a profile by name.
@@ -293,6 +300,30 @@ mod tests {
         assert_eq!(sanitize_name("../../etc").unwrap(), "etc");
         assert_eq!(sanitize_name("Home Dual").unwrap(), "Home Dual");
         assert_eq!(sanitize_name("a<b>c:d").unwrap(), "abcd");
+    }
+
+    #[test]
+    fn listing_treats_missing_dir_as_empty_and_filters_non_json() {
+        let dir = TestDir::new();
+        assert!(list_profiles_in(&dir.0.join("missing")).unwrap().is_empty());
+        fs::write(dir.0.join("b.json"), b"{}").unwrap();
+        fs::write(dir.0.join("a.json"), b"{}").unwrap();
+        fs::write(dir.0.join("notes.txt"), b"").unwrap();
+        assert_eq!(list_profiles_in(&dir.0).unwrap(), ["a", "b"]);
+        let file = dir.0.join("a.json");
+        assert!(list_profiles_in(&file).is_err());
+    }
+
+    #[test]
+    fn removal_is_idempotent_but_propagates_other_errors() {
+        let dir = TestDir::new();
+        let path = dir.0.join("Home.json");
+        fs::write(&path, b"{}").unwrap();
+        remove_if_present(&path).unwrap();
+        assert!(!path.exists());
+        remove_if_present(&path).unwrap();
+        // Removing a directory as a file fails with an error other than NotFound.
+        assert!(remove_if_present(&dir.0).is_err());
     }
 
     #[test]
