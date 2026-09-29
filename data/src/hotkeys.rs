@@ -1,12 +1,8 @@
 use crate::config::{AppConfig, HotkeyActionSpec, build_hotkey_map};
-use cosmic::iced::futures::SinkExt;
-use cosmic::iced::{Subscription, stream};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // HotkeyManager – registers hotkeys and keeps the ID → action-chain mapping
@@ -126,62 +122,26 @@ impl HotkeyManager {
 }
 
 // ---------------------------------------------------------------------------
-// Subscription – polls global hotkey events and emits action chains
+// Event polling – drained by the UI's hotkey subscription
 // ---------------------------------------------------------------------------
-
-/// Identity/data wrapper for the hotkey subscription. Hashing the set of
-/// registered hotkey ids ensures the subscription restarts when the bindings
-/// change.
-struct HotkeyData {
-    generation: u64,
-    registered_ids: Vec<u32>,
-}
-
-impl Hash for HotkeyData {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.generation.hash(state);
-        self.registered_ids.hash(state);
-    }
-}
 
 fn should_emit(registered_ids: &[u32], event_id: u32, state: HotKeyState) -> bool {
     state == HotKeyState::Pressed && registered_ids.binary_search(&event_id).is_ok()
 }
 
-/// Create an iced `Subscription` that polls global hotkey events.
-///
-/// The subscription emits the triggered hotkey's OS id whenever a registered
-/// hotkey is pressed. The caller resolves the current action chain by id.
-pub fn hotkey_subscription(mut registered_ids: Vec<u32>, generation: u64) -> Subscription<u32> {
-    registered_ids.sort_unstable();
-    registered_ids.dedup();
+/// Drops events queued before a listener started.
+pub fn discard_pending_events() {
+    for _ in GlobalHotKeyEvent::receiver().try_iter() {}
+}
 
-    Subscription::run_with(
-        HotkeyData {
-            generation,
-            registered_ids,
-        },
-        |data| {
-            let registered_ids = data.registered_ids.clone();
-            stream::channel(
-                16,
-                move |mut emitter: cosmic::iced::futures::channel::mpsc::Sender<u32>| async move {
-                    let receiver = GlobalHotKeyEvent::receiver();
-                    for _ in receiver.try_iter() {}
-                    loop {
-                        while let Ok(event) = receiver.try_recv() {
-                            if should_emit(&registered_ids, event.id(), event.state)
-                                && emitter.send(event.id()).await.is_err()
-                            {
-                                return;
-                            }
-                        }
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
-                },
-            )
-        },
-    )
+/// OS ids of registered hotkeys pressed since the last call. `registered_ids`
+/// must be sorted.
+pub fn take_pressed(registered_ids: &[u32]) -> Vec<u32> {
+    GlobalHotKeyEvent::receiver()
+        .try_iter()
+        .filter(|event| should_emit(registered_ids, event.id(), event.state))
+        .map(|event| event.id())
+        .collect()
 }
 
 #[cfg(test)]

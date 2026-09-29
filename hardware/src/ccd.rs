@@ -2,8 +2,8 @@
 //! full monitor-layout profiles.
 //!
 //! Mirrors the structure of [`crate::ddc`]: a [`thiserror`] error enum, plain
-//! serde data structs, and blocking functions. The application runs these via
-//! `tokio::task::spawn_blocking` wrapped in `cosmic::app::Task::perform`.
+//! serde data structs, and blocking functions. The application runs these off
+//! the UI thread via `tokio::task::spawn_blocking`.
 //!
 //! Adapter LUIDs and endpoint IDs are not persistent monitor identities. Saved
 //! configurations are conservatively remapped by monitor device path before

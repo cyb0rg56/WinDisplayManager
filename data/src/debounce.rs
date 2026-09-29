@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum SliderFeature {
+pub enum SliderFeature {
     Brightness,
     Contrast,
 }
@@ -20,7 +20,7 @@ struct PendingChange {
 
 /// Drafts are separate from both confirmed readings and submitted hardware jobs.
 #[derive(Debug, Default)]
-pub(super) struct SliderDebounce {
+pub struct SliderDebounce {
     revision: u64,
     pending: HashMap<(u32, SliderFeature), PendingChange>,
 }

@@ -1,17 +1,15 @@
-use super::AppModel;
 use super::config_ops::ConfigOp;
-use super::{Message, Page, RecordingState};
+use super::{AppState, Effect, RecordingState};
 use crate::config::{
     ActionTarget, ActionType, AppConfig, Hotkey, HotkeyActionSpec, HotkeyBinding, MonitorInput,
     MonitorTarget, hotkey_headings,
 };
 use crate::ddc::{InputSource, MonitorKey, PowerMode};
 use crate::hotkeys::HotkeyManager;
-use cosmic::iced::keyboard::{Key, Modifiers};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub(super) fn parse_value_draft(value: &str) -> Result<Option<i32>, &'static str> {
+pub fn parse_value_draft(value: &str) -> Result<Option<i32>, &'static str> {
     let value = value.trim();
     if value.is_empty() || value == "+" || value == "-" {
         return Ok(None);
@@ -25,7 +23,7 @@ pub(super) fn parse_value_draft(value: &str) -> Result<Option<i32>, &'static str
     Ok(Some(parsed))
 }
 
-pub(super) fn parse_vcp_draft(value: &str) -> Result<Option<u8>, &'static str> {
+pub fn parse_vcp_draft(value: &str) -> Result<Option<u8>, &'static str> {
     let value = value.trim();
     if value.is_empty() || value.eq_ignore_ascii_case("0x") {
         return Ok(None);
@@ -40,25 +38,19 @@ pub(super) fn parse_vcp_draft(value: &str) -> Result<Option<u8>, &'static str> {
         .map_err(|_| "VCP code must be between 00 and FF")
 }
 
-pub(super) fn uses_monitor_inputs(action: &HotkeyActionSpec) -> bool {
+fn uses_monitor_inputs(action: &HotkeyActionSpec) -> bool {
     action.action_type != ActionType::Off && action.target == ActionTarget::InputSource
 }
 
-pub(super) fn explicit_monitor_ids(action: &HotkeyActionSpec) -> Vec<MonitorTarget> {
+fn explicit_monitor_ids(action: &HotkeyActionSpec) -> Vec<MonitorTarget> {
     action.explicit_targets()
 }
 
-pub(super) fn action_monitor_selected(
-    action: &HotkeyActionSpec,
-    monitor_id: &MonitorTarget,
-) -> bool {
+pub fn action_monitor_selected(action: &HotkeyActionSpec, monitor_id: &MonitorTarget) -> bool {
     action.all_monitors || explicit_monitor_ids(action).contains(monitor_id)
 }
 
-pub(super) fn action_master_selected(
-    action: &HotkeyActionSpec,
-    detected_ids: &[MonitorTarget],
-) -> bool {
+pub fn action_master_selected(action: &HotkeyActionSpec, detected_ids: &[MonitorTarget]) -> bool {
     action.all_monitors
         || (!detected_ids.is_empty()
             && detected_ids
@@ -66,7 +58,7 @@ pub(super) fn action_master_selected(
                 .all(|monitor_id| action_monitor_selected(action, monitor_id)))
 }
 
-pub(super) fn toggle_action_monitor(
+fn toggle_action_monitor(
     action: &mut HotkeyActionSpec,
     detected_ids: &[MonitorTarget],
     monitor_id: MonitorTarget,
@@ -101,7 +93,7 @@ pub(super) fn toggle_action_monitor(
     }
 }
 
-pub(super) fn resolve_triggered_actions(
+fn resolve_triggered_actions(
     enabled: bool,
     recording: bool,
     action_map: &HashMap<u32, Vec<HotkeyActionSpec>>,
@@ -113,60 +105,8 @@ pub(super) fn resolve_triggered_actions(
     action_map.get(&id).cloned()
 }
 
-/// Convert an Iced Key to our internal string format
-pub(super) fn key_to_string(key: &Key) -> String {
-    match key {
-        Key::Named(named_key) => {
-            use cosmic::iced::keyboard::key::Named;
-            match named_key {
-                Named::F1 => "F1",
-                Named::F2 => "F2",
-                Named::F3 => "F3",
-                Named::F4 => "F4",
-                Named::F5 => "F5",
-                Named::F6 => "F6",
-                Named::F7 => "F7",
-                Named::F8 => "F8",
-                Named::F9 => "F9",
-                Named::F10 => "F10",
-                Named::F11 => "F11",
-                Named::F12 => "F12",
-                Named::ArrowUp => "ArrowUp",
-                Named::ArrowDown => "ArrowDown",
-                Named::ArrowLeft => "ArrowLeft",
-                Named::ArrowRight => "ArrowRight",
-                Named::Home => "Home",
-                Named::End => "End",
-                Named::PageUp => "PageUp",
-                Named::PageDown => "PageDown",
-                Named::Insert => "Insert",
-                Named::Delete => "Delete",
-                Named::Enter => "Enter",
-                Named::Escape => "Escape",
-                Named::Backspace => "Backspace",
-                Named::Tab => "Tab",
-                _ => return String::new(),
-            }
-            .to_string()
-        }
-        Key::Character(c) => {
-            let ch = c.chars().next().unwrap_or('?');
-            if ch == ' ' {
-                "Space".to_string()
-            } else if ch.is_ascii_alphabetic() {
-                format!("Key{}", ch.to_uppercase())
-            } else if ch.is_ascii_digit() {
-                format!("Digit{}", ch)
-            } else {
-                String::new()
-            }
-        }
-        Key::Unidentified => String::new(),
-    }
-}
-
 /// Format a hotkey combination for display
-pub(super) fn format_hotkey(ctrl: bool, alt: bool, shift: bool, win: bool, key: &str) -> String {
+fn format_hotkey(ctrl: bool, alt: bool, shift: bool, win: bool, key: &str) -> String {
     let mut parts = Vec::new();
     if ctrl {
         parts.push("Ctrl");
@@ -186,8 +126,8 @@ pub(super) fn format_hotkey(ctrl: bool, alt: bool, shift: bool, win: bool, key: 
     parts.join(" + ")
 }
 
-impl AppModel {
-    pub(super) fn hotkey_mut(&mut self, id: &str) -> Option<&mut Hotkey> {
+impl AppState {
+    fn hotkey_mut(&mut self, id: &str) -> Option<&mut Hotkey> {
         self.config
             .hotkeys
             .hotkeys
@@ -195,12 +135,12 @@ impl AppModel {
             .find(|hotkey| hotkey.id == id)
     }
 
-    pub(super) fn action_mut(&mut self, id: &str, idx: usize) -> Option<&mut HotkeyActionSpec> {
+    fn action_mut(&mut self, id: &str, idx: usize) -> Option<&mut HotkeyActionSpec> {
         self.hotkey_mut(id)
             .and_then(|hotkey| hotkey.actions.get_mut(idx))
     }
 
-    pub(super) fn initialize_hotkey_drafts(&mut self, id: &str) {
+    fn initialize_hotkey_drafts(&mut self, id: &str) {
         let Some(hotkey) = self
             .config
             .hotkeys
@@ -220,13 +160,13 @@ impl AppModel {
         }
     }
 
-    pub(super) fn clear_hotkey_drafts(&mut self, id: &str) {
+    fn clear_hotkey_drafts(&mut self, id: &str) {
         self.value_drafts
             .retain(|(hotkey_id, _), _| hotkey_id != id);
         self.vcp_drafts.retain(|(hotkey_id, _), _| hotkey_id != id);
     }
 
-    pub(super) fn validate_action_drafts(&self) -> Option<String> {
+    fn validate_action_drafts(&self) -> Option<String> {
         for hotkey in &self.config.hotkeys.hotkeys {
             for (idx, action) in hotkey.actions.iter().enumerate() {
                 // Off actions hide their value fields, so stale drafts cannot be corrected.
@@ -290,23 +230,30 @@ impl AppModel {
         }
     }
 
-    pub(super) fn refresh_hotkey_actions(&mut self) {
+    fn refresh_hotkey_actions(&mut self) {
         if let Some(manager) = &mut self.hotkey_manager {
             manager.rebuild_action_map(&self.config);
             self.hotkey_action_map = manager.action_map();
         }
     }
 
-    pub(super) fn handle_hotkey_triggered(&mut self, id: u32) -> cosmic::app::Task<Message> {
-        if let Some(actions) = resolve_triggered_actions(
+    pub(super) fn handle_hotkey_triggered(&mut self, id: u32) {
+        let Some(actions) = resolve_triggered_actions(
             self.config.hotkeys_enabled,
-            !matches!(self.recording_state, RecordingState::NotRecording),
+            self.is_recording(),
             self.hotkey_action_map.as_ref(),
             id,
-        ) {
-            return self.handle_hotkey_actions(actions);
+        ) else {
+            return;
+        };
+        if let Err(error) = self
+            .action_executor
+            .enqueue_actions(actions, self.config.turn_off_behavior)
+        {
+            self.status_message = format!("Hotkey not dispatched: {error}");
+            return;
         }
-        cosmic::app::Task::none()
+        self.start_next_hardware_job();
     }
 
     pub(super) fn set_hotkey_label(&mut self, id: String, label: String) {
@@ -346,12 +293,8 @@ impl AppModel {
         self.pending_hotkey_delete = Some(id);
     }
 
-    pub(super) fn cancel_delete_hotkey(&mut self) {
-        self.pending_hotkey_delete = None;
-    }
-
     /// Card heading for `id`, matching the hotkey list. `None` when that hotkey is gone.
-    pub(super) fn hotkey_delete_title(&self, id: &str) -> Option<String> {
+    pub fn hotkey_delete_title(&self, id: &str) -> Option<String> {
         let headings = hotkey_headings(&self.config.hotkeys.hotkeys);
         self.config
             .hotkeys
@@ -393,27 +336,10 @@ impl AppModel {
         self.refresh_hotkey_registration();
     }
 
-    pub(super) fn key_pressed(
-        &mut self,
-        modifiers: Modifiers,
-        key: Key,
-    ) -> cosmic::app::Task<Message> {
-        let key_string = key_to_string(&key);
-        if key_string.is_empty() {
-            return cosmic::app::Task::none();
+    pub(super) fn key_recorded(&mut self, binding: HotkeyBinding) {
+        if binding.key.is_empty() {
+            return;
         }
-
-        let ctrl = modifiers.control();
-        let alt = modifiers.alt();
-        let shift = modifiers.shift();
-        let win = modifiers.logo();
-        let binding = HotkeyBinding {
-            ctrl,
-            alt,
-            shift,
-            win,
-            key: key_string.clone(),
-        };
         if let RecordingState::Recording { hotkey_id, .. } = &self.recording_state {
             let hotkey_id = hotkey_id.clone();
             let duplicate = binding.to_hotkey().is_some_and(|candidate| {
@@ -427,20 +353,24 @@ impl AppModel {
             });
             if duplicate {
                 self.status_message = "That key combination is already assigned.".into();
-                return cosmic::app::Task::none();
+                return;
             }
+            let formatted = format_hotkey(
+                binding.ctrl,
+                binding.alt,
+                binding.shift,
+                binding.win,
+                &binding.key,
+            );
             if let Some(hotkey) = self.hotkey_mut(&hotkey_id) {
                 hotkey.binding = binding;
             }
-            self.status_message = format!(
-                "Hotkey bound to {}. Remember to save configuration.",
-                format_hotkey(ctrl, alt, shift, win, &key_string)
-            );
+            self.status_message =
+                format!("Hotkey bound to {formatted}. Remember to save configuration.");
             self.recording_state = RecordingState::NotRecording;
             self.config_dirty = true;
             self.refresh_hotkey_registration();
         }
-        cosmic::app::Task::none()
     }
 
     pub(super) fn add_action(&mut self, id: String) {
@@ -629,35 +559,35 @@ impl AppModel {
         self.refresh_hotkey_actions();
     }
 
-    pub(super) fn save_config(&mut self) -> cosmic::app::Task<Message> {
+    pub(super) fn save_config(&mut self) {
         if let Some(error) = self.validate_action_drafts() {
             self.status_message = error;
-            return cosmic::app::Task::none();
+            return;
         }
-        self.enqueue_config_op(ConfigOp::Save)
+        self.enqueue_config_op(ConfigOp::Save);
     }
 
-    pub(super) fn toggle_hotkeys(&mut self, enabled: bool) -> cosmic::app::Task<Message> {
-        self.enqueue_config_op(ConfigOp::SetHotkeysEnabled(enabled))
+    pub(super) fn toggle_hotkeys(&mut self, enabled: bool) {
+        self.enqueue_config_op(ConfigOp::SetHotkeysEnabled(enabled));
     }
 
-    pub(super) fn retry_config(&mut self) -> cosmic::app::Task<Message> {
+    pub(super) fn retry_config(&mut self) {
         self.pending_config_reset = false;
-        self.enqueue_config_op(ConfigOp::Retry)
+        self.enqueue_config_op(ConfigOp::Retry);
     }
 
-    pub(super) fn recover_config_backup(&mut self) -> cosmic::app::Task<Message> {
+    pub(super) fn recover_config_backup(&mut self) {
         self.pending_config_reset = false;
-        self.enqueue_config_op(ConfigOp::RecoverBackup)
+        self.enqueue_config_op(ConfigOp::RecoverBackup);
     }
 
-    pub(super) fn confirm_reset_config(&mut self) -> cosmic::app::Task<Message> {
+    pub(super) fn confirm_reset_config(&mut self) {
         if !std::mem::take(&mut self.pending_config_reset)
             || self.config_store.recovery_error().is_none()
         {
-            return cosmic::app::Task::none();
+            return;
         }
-        self.enqueue_config_op(ConfigOp::Reset)
+        self.enqueue_config_op(ConfigOp::Reset);
     }
 
     pub(super) fn install_recovered_config(&mut self, config: AppConfig, status: &str) {
@@ -689,9 +619,7 @@ impl AppModel {
         self.initialize_hotkey_drafts(&id);
         self.expanded_hotkey = Some(id.clone());
         self.recording_state = RecordingState::Recording { hotkey_id: id };
-        if let Some(position) = self.nav_position_of(Page::Hotkeys) {
-            self.nav.activate_position(position);
-        }
+        self.emit(Effect::ShowHotkeys);
         self.config_dirty = true;
     }
 }

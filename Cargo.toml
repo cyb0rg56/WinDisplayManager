@@ -1,9 +1,19 @@
-[package]
-name = "windisplaymanager_rs"
+[workspace]
+members = ["hardware", "data", "ui"]
+default-members = [".", "hardware", "data", "ui"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.6"
 edition = "2024"
-description = "Windows Display Manager - DDC/CI monitor control with GUI"
 license = "MIT"
+
+[package]
+name = "windisplaymanager_rs"
+description = "Windows Display Manager - DDC/CI monitor control with GUI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "windisplaymanager_rs"
@@ -17,6 +27,15 @@ lto = "thin"
 winres = "0.1"
 
 [dependencies]
+data.workspace = true
+ui.workspace = true
+env_logger.workspace = true
+libcosmic.workspace = true
+
+[workspace.dependencies]
+hardware = { path = "hardware" }
+data = { path = "data" }
+ui = { path = "ui" }
 ddc = "0.2"
 ddc-winapi = "0.2"
 global-hotkey = "0.8"
@@ -38,7 +57,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-[dependencies.libcosmic]
+[workspace.dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
 features = [

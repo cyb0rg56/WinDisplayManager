@@ -1,39 +1,14 @@
-mod actions;
-mod config_ops;
-mod coordination;
-mod debounce;
-mod hardware_queue;
-mod hotkey_editor;
-mod hotkey_views;
-mod modal;
-mod monitor_views;
-mod monitors;
-mod profile_handlers;
-mod profile_views;
-mod settings_views;
-mod views;
-
-use self::actions::HardwareJob;
-use self::coordination::{HardwareCoordinator, HardwareResult};
-use self::debounce::{DebounceToken, SliderDebounce, SliderFeature};
-
-use crate::config::{
-    ActionTarget, ActionType, AppConfig, ConfigStore, HotkeyActionSpec, MonitorTarget,
-    TurnOffBehavior,
-};
-use crate::ddc::{InputSource, MonitorInfo, MonitorKey, MonitorState, PowerMode};
-use crate::hotkeys::{self, HotkeyManager};
-use crate::persistence::LoadOutcome;
-use crate::startup;
-use crate::tray::{SystemTray, TrayMessage, TrayStream};
+use crate::keys;
+use crate::modal;
+use crate::subscriptions;
 use cosmic::iced::event::{self, Event};
 use cosmic::iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
 use cosmic::iced::{Length, Subscription, window};
 use cosmic::prelude::*;
 use cosmic::widget::{self, nav_bar};
 use cosmic::{Core, executor};
-use std::collections::HashMap;
-use std::sync::Arc;
+use data::state::{AppState, Input};
+use data::tray::{SystemTray, TrayMessage, TrayStream};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -66,67 +41,12 @@ pub enum Page {
 
 #[derive(Clone, Debug)]
 pub enum Message {
-    // Monitor controls
-    RefreshMonitors,
-    RetryMonitor(u32),
-    SelectInputSource(u32, InputSource),
-    HardwareJobFinished(u64, Result<HardwareResult, String>),
-    // Debounced slider changes
-    BrightnessSliderChanged(u32, u16),
-    ContrastSliderChanged(u32, u16),
-    ApplyBrightnessDebounced(u32, DebounceToken),
-    ApplyContrastDebounced(u32, DebounceToken),
-    // Hotkeys
-    HotkeyTriggered(u32),
-    ToggleHotkeys(bool),
-    AddHotkey,
-    SetHotkeyLabel(String, String),
-    ToggleHotkeyEditor(String),
-    RequestDeleteHotkey(String),
-    CancelDeleteHotkey,
-    DeleteHotkey(String),
-    StartRecording(String),
-    CancelRecording,
-    ClearBinding(String),
+    /// Handled by the UI-agnostic application state.
+    Data(Input),
+    /// Keyboard input while recording a hotkey.
     KeyPressed(Modifiers, Key),
-    AddAction(String),
-    DeleteAction(String, usize),
-    SetActionType(String, usize, ActionType),
-    SetActionTarget(String, usize, ActionTarget),
-    ActionValueDraftChanged(String, usize, String),
-    ActionVcpDraftChanged(String, usize, String),
-    SetActionInputSource(String, usize, InputSource),
-    SetMonitorInput(String, usize, MonitorTarget, Option<InputSource>),
-    SetActionPowerMode(String, usize, PowerMode),
-    SetActionProfile(String, usize, String),
-    ToggleActionAllMonitors(String, usize, bool),
-    ToggleActionMonitor(String, usize, MonitorTarget, bool),
-    RebindMonitorTarget(String, usize, MonitorTarget, MonitorKey),
-    RemoveMonitorTarget(String, usize, MonitorTarget),
-    SetTurnOffBehavior(TurnOffBehavior),
-    ToggleStartWithWindows(bool),
-    ToggleStartMinimized(bool),
-    SaveConfig,
     ToggleSettings,
     CloseSettings,
-    RetryConfig,
-    RecoverConfigBackup,
-    RequestResetConfig,
-    CancelResetConfig,
-    ConfirmResetConfig,
-    ConfigOpFinished(config_ops::ConfigOp, config_ops::ConfigOpDone),
-    // Profiles
-    RefreshProfiles,
-    ProfilesListed(u64, Result<Vec<String>, String>),
-    ProfileNameInput(String),
-    SaveCurrentProfile(String),
-    ConfirmReplaceProfile,
-    CancelReplaceProfile,
-    ApplyProfile(String),
-    RequestDeleteProfile(String),
-    CancelDeleteProfile,
-    DeleteProfile(String),
-    AddProfileHotkey(String),
     // System tray
     Tray(TrayMessage),
     /// Hide window (close-to-tray)
@@ -139,54 +59,16 @@ pub enum Message {
 }
 
 // ---------------------------------------------------------------------------
-// Hotkey recording state
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-pub enum RecordingState {
-    NotRecording,
-    Recording { hotkey_id: String },
-}
-
-// ---------------------------------------------------------------------------
 // Application model
 // ---------------------------------------------------------------------------
 
 pub struct AppModel {
     core: Core,
-    nav: nav_bar::Model,
-    monitor_generation: u64,
-    detected_monitors: Vec<MonitorInfo>,
-    monitors: Vec<MonitorState>,
-    monitor_load_errors: HashMap<u32, String>,
-    config: AppConfig,
-    config_store: ConfigStore,
-    config_ops: std::collections::VecDeque<config_ops::ConfigOp>,
-    config_op_active: bool,
-    pending_config_reset: bool,
-    hotkey_manager: Option<HotkeyManager>,
-    hotkey_action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
-    hotkey_status: HashMap<String, bool>,
-    hotkey_generation: u64,
-    status_message: String,
-    recording_state: RecordingState,
-    expanded_hotkey: Option<String>,
-    pending_hotkey_delete: Option<String>,
-    value_drafts: HashMap<(String, usize), String>,
-    vcp_drafts: HashMap<(String, usize), String>,
-    config_dirty: bool,
-    config_path: String,
-    about: widget::about::About,
-    slider_debounce: SliderDebounce,
-    profiles: Vec<String>,
-    profiles_request: u64,
-    profile_name_input: String,
-    pending_profile_delete: Option<String>,
-    pending_profile_replace: Option<String>,
-    action_executor: HardwareCoordinator,
-    refresh_profiles_after_jobs: bool,
+    pub(crate) nav: nav_bar::Model,
+    pub(crate) about: widget::about::About,
+    pub(crate) state: AppState,
     // System tray
-    tray: Option<(SystemTray, TrayStream)>,
+    pub(crate) tray: Option<(SystemTray, TrayStream)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,49 +91,7 @@ impl cosmic::Application for AppModel {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, cosmic::app::Task<Self::Message>) {
-        // Load persistent config
-        let (config_store, outcome) = match AppConfig::config_path() {
-            Ok(path) => ConfigStore::open(path),
-            Err(error) => ConfigStore::unavailable(error),
-        };
-        let config = match outcome {
-            LoadOutcome::Missing => AppConfig::default(),
-            LoadOutcome::Loaded(config) => config,
-            LoadOutcome::Failed(error) => {
-                log::error!("Configuration requires recovery: {error}");
-                AppConfig::recovery_placeholder()
-            }
-        };
-        // Keep the Run key aligned with saved settings. Skip recovery placeholders
-        // so a failed load cannot delete a registration the user already chose.
-        if config_store.recovery_error().is_none()
-            && let Err(error) = startup::apply(config.start_with_windows, config.start_minimized)
-        {
-            log::warn!("Failed to sync Windows startup registration: {error}");
-        }
-
-        // Set up hotkey manager
-        let hotkey_manager = HotkeyManager::new(&config);
-        let hotkey_action_map = hotkey_manager
-            .as_ref()
-            .map(|m| m.action_map())
-            .unwrap_or_else(|| Arc::new(HashMap::new()));
-        let hotkey_status = hotkey_manager
-            .as_ref()
-            .map(|m| m.status())
-            .unwrap_or_default();
-
-        let mut value_drafts = HashMap::new();
-        let mut vcp_drafts = HashMap::new();
-        for hotkey in &config.hotkeys.hotkeys {
-            for (idx, action) in hotkey.actions.iter().enumerate() {
-                value_drafts.insert((hotkey.id.clone(), idx), action.value.to_string());
-                vcp_drafts.insert(
-                    (hotkey.id.clone(), idx),
-                    format!("0x{:02X}", action.vcp_code),
-                );
-            }
-        }
+        let (state, effects) = AppState::load();
 
         // Build nav model with a placeholder; will be rebuilt after detection
         let mut nav = nav_bar::Model::default();
@@ -278,48 +118,15 @@ impl cosmic::Application for AppModel {
             }
         };
 
-        let config_path = config_store.path().display().to_string();
         let mut app = AppModel {
             core,
             nav,
-            monitor_generation: 0,
-            detected_monitors: Vec::new(),
-            monitors: Vec::new(),
-            monitor_load_errors: HashMap::new(),
-            config,
-            config_store,
-            config_ops: Default::default(),
-            config_op_active: false,
-            pending_config_reset: false,
-            hotkey_manager,
-            hotkey_action_map,
-            hotkey_status,
-            hotkey_generation: 0,
-            status_message: "Starting...".into(),
-            recording_state: RecordingState::NotRecording,
-            expanded_hotkey: None,
-            pending_hotkey_delete: None,
-            value_drafts,
-            vcp_drafts,
-            config_dirty: false,
-            config_path,
             about,
-            slider_debounce: SliderDebounce::default(),
-            profiles: Vec::new(),
-            profiles_request: 0,
-            profile_name_input: String::new(),
-            pending_profile_delete: None,
-            pending_profile_replace: None,
-            action_executor: HardwareCoordinator::default(),
-            refresh_profiles_after_jobs: false,
+            state,
             tray,
         };
-
-        let cmd = cosmic::app::Task::batch([
-            app.update(Message::RefreshMonitors),
-            app.update(Message::RefreshProfiles),
-        ]);
-        (app, cmd)
+        let task = app.run_effects(effects);
+        (app, task)
     }
 
     fn nav_model(&self) -> Option<&nav_bar::Model> {
@@ -332,34 +139,35 @@ impl cosmic::Application for AppModel {
     }
 
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
-        if let Some(name) = self.pending_profile_delete.clone() {
+        if let Some(name) = self.state.pending_profile_delete() {
             return Some(modal::confirm_dialog(
                 "Delete profile?",
                 format!("Delete \"{name}\"? This removes the saved layout."),
                 "Delete",
-                Message::CancelDeleteProfile,
-                Message::DeleteProfile(name),
+                Message::Data(Input::CancelDeleteProfile),
+                Message::Data(Input::DeleteProfile(name.to_string())),
             ));
         }
-        let id = self.pending_hotkey_delete.clone()?;
-        let title = self.hotkey_delete_title(&id)?;
+        let id = self.state.pending_hotkey_delete()?;
+        let title = self.state.hotkey_delete_title(id)?;
         Some(modal::confirm_dialog(
             "Delete hotkey?",
             format!("Delete \"{title}\"? This removes the hotkey and its actions."),
             "Delete",
-            Message::CancelDeleteHotkey,
-            Message::DeleteHotkey(id),
+            Message::Data(Input::CancelDeleteHotkey),
+            Message::Data(Input::DeleteHotkey(id.to_string())),
         ))
     }
 
     fn on_escape(&mut self) -> cosmic::app::Task<Self::Message> {
-        if self.pending_profile_delete.is_some() {
-            self.cancel_delete_profile();
+        let mut effects = Vec::new();
+        if self.state.pending_profile_delete().is_some() {
+            effects.extend(self.state.update(Input::CancelDeleteProfile));
         }
-        if self.pending_hotkey_delete.is_some() {
-            self.cancel_delete_hotkey();
+        if self.state.pending_hotkey_delete().is_some() {
+            effects.extend(self.state.update(Input::CancelDeleteHotkey));
         }
-        cosmic::app::Task::none()
+        self.run_effects(effects)
     }
 
     // Intercept the header-bar close button → hide to tray instead of exiting
@@ -387,16 +195,15 @@ impl cosmic::Application for AppModel {
         let mut subs: Vec<Subscription<Self::Message>> = Vec::new();
 
         // Global hotkey polling subscription (only when enabled)
-        if self.config.hotkeys_enabled && !self.hotkey_action_map.is_empty() {
-            let registered_ids = self.hotkey_action_map.keys().copied().collect();
+        if let Some(registered_ids) = self.state.listened_hotkey_ids() {
             subs.push(
-                hotkeys::hotkey_subscription(registered_ids, self.hotkey_generation)
-                    .map(Message::HotkeyTriggered),
+                subscriptions::hotkeys(registered_ids, self.state.hotkey_generation())
+                    .map(|id| Message::Data(Input::HotkeyTriggered(id))),
             );
         }
 
         // Keyboard event subscription when recording hotkeys
-        if !matches!(self.recording_state, RecordingState::NotRecording) {
+        if self.state.is_recording() {
             subs.push(event::listen_with(|event, _status, _id| {
                 if let Event::Keyboard(KeyboardEvent::KeyPressed { key, modifiers, .. }) = event {
                     Some(Message::KeyPressed(modifiers, key))
@@ -408,7 +215,7 @@ impl cosmic::Application for AppModel {
 
         // System tray subscription
         if let Some((_, ref tray_stream)) = self.tray {
-            subs.push(tray_stream.clone().subscription().map(Message::Tray));
+            subs.push(subscriptions::tray(tray_stream.clone()).map(Message::Tray));
         }
 
         subs.push(event::listen_with(|event, _status, id| {
@@ -427,168 +234,21 @@ impl cosmic::Application for AppModel {
     // -----------------------------------------------------------------------
 
     fn update(&mut self, message: Self::Message) -> cosmic::app::Task<Self::Message> {
-        // The store also guards saves; this gate prevents editing or executing
-        // placeholder settings while a failed load awaits the user's decision.
-        if self
-            .pending_hotkey_delete
-            .as_ref()
-            .is_some_and(|id| self.hotkey_delete_title(id).is_none())
-        {
-            self.pending_hotkey_delete = None;
-        }
-
-        if self.config_store.recovery_error().is_some()
-            && matches!(
-                message,
-                Message::HotkeyTriggered(_)
-                    | Message::ToggleHotkeys(_)
-                    | Message::SaveConfig
-                    | Message::AddHotkey
-                    | Message::SetHotkeyLabel(_, _)
-                    | Message::RequestDeleteHotkey(_)
-                    | Message::DeleteHotkey(_)
-                    | Message::StartRecording(_)
-                    | Message::ClearBinding(_)
-                    | Message::KeyPressed(_, _)
-                    | Message::AddAction(_)
-                    | Message::DeleteAction(_, _)
-                    | Message::SetActionType(_, _, _)
-                    | Message::SetActionTarget(_, _, _)
-                    | Message::ActionValueDraftChanged(_, _, _)
-                    | Message::ActionVcpDraftChanged(_, _, _)
-                    | Message::SetActionInputSource(_, _, _)
-                    | Message::SetMonitorInput(_, _, _, _)
-                    | Message::SetActionPowerMode(_, _, _)
-                    | Message::SetActionProfile(_, _, _)
-                    | Message::ToggleActionAllMonitors(_, _, _)
-                    | Message::ToggleActionMonitor(_, _, _, _)
-                    | Message::RebindMonitorTarget(_, _, _, _)
-                    | Message::RemoveMonitorTarget(_, _, _)
-                    | Message::SetTurnOffBehavior(_)
-                    | Message::ToggleStartWithWindows(_)
-                    | Message::ToggleStartMinimized(_)
-                    | Message::AddProfileHotkey(_)
-            )
-        {
-            self.status_message =
-                "Configuration is read-only until you retry, recover a backup, or confirm a reset."
-                    .into();
-            return cosmic::app::Task::none();
-        }
         match message {
-            // -- Monitor detection ------------------------------------------
-            Message::RefreshMonitors => return self.refresh_monitors(),
-            Message::RetryMonitor(monitor_id) => return self.retry_monitor(monitor_id),
-
-            // -- Brightness -------------------------------------------------
-            Message::BrightnessSliderChanged(monitor_id, value) => {
-                return self.slider_changed(monitor_id, SliderFeature::Brightness, value);
+            Message::Data(input) => {
+                let effects = self.state.update(input);
+                return self.run_effects(effects);
             }
-            Message::ApplyBrightnessDebounced(monitor_id, token) => {
-                return self.apply_slider_debounced(monitor_id, SliderFeature::Brightness, token);
+            Message::KeyPressed(modifiers, key) => {
+                let binding = keys::binding(modifiers, &key);
+                let effects = self.state.update(Input::KeyRecorded(binding));
+                return self.run_effects(effects);
             }
-
-            // -- Contrast ---------------------------------------------------
-            Message::ContrastSliderChanged(monitor_id, value) => {
-                return self.slider_changed(monitor_id, SliderFeature::Contrast, value);
-            }
-            Message::ApplyContrastDebounced(monitor_id, token) => {
-                return self.apply_slider_debounced(monitor_id, SliderFeature::Contrast, token);
-            }
-
-            // -- Input source -----------------------------------------------
-            Message::SelectInputSource(monitor_id, source) => {
-                return self.set_input_source(monitor_id, source);
-            }
-
-            Message::HardwareJobFinished(id, result) => {
-                return self.hardware_job_finished(id, result);
-            }
-            Message::RebindMonitorTarget(id, idx, old, key) => {
-                self.rebind_monitor_target(id, idx, old, key)
-            }
-            Message::RemoveMonitorTarget(id, idx, target) => {
-                self.remove_monitor_target(id, idx, target)
-            }
-
-            // -- Hotkey actions ---------------------------------------------
-            Message::HotkeyTriggered(id) => return self.handle_hotkey_triggered(id),
-            Message::AddHotkey => self.add_hotkey(),
-            Message::SetHotkeyLabel(id, label) => self.set_hotkey_label(id, label),
-            Message::ToggleHotkeyEditor(id) => self.toggle_hotkey_editor(id),
-            Message::RequestDeleteHotkey(id) => self.request_delete_hotkey(id),
-            Message::CancelDeleteHotkey => self.cancel_delete_hotkey(),
-            Message::DeleteHotkey(id) => self.delete_hotkey(id),
-            Message::StartRecording(hotkey_id) => self.start_recording(hotkey_id),
-            Message::CancelRecording => self.cancel_recording(),
-            Message::ClearBinding(id) => self.clear_binding(id),
-            Message::KeyPressed(modifiers, key) => return self.key_pressed(modifiers, key),
-
-            Message::AddAction(id) => self.add_action(id),
-            Message::DeleteAction(id, idx) => self.delete_action(id, idx),
-            Message::SetActionType(id, idx, action_type) => {
-                self.set_action_type(id, idx, action_type)
-            }
-            Message::SetActionTarget(id, idx, target) => self.set_action_target(id, idx, target),
-            Message::ActionValueDraftChanged(id, idx, draft) => {
-                self.action_value_draft_changed(id, idx, draft)
-            }
-            Message::ActionVcpDraftChanged(id, idx, draft) => {
-                self.action_vcp_draft_changed(id, idx, draft)
-            }
-            Message::SetActionInputSource(id, idx, source) => {
-                self.set_action_input_source(id, idx, source)
-            }
-            Message::SetMonitorInput(id, idx, monitor_id, source) => {
-                self.set_monitor_input(id, idx, monitor_id, source)
-            }
-            Message::SetActionPowerMode(id, idx, mode) => self.set_action_power_mode(id, idx, mode),
-            Message::SetActionProfile(id, idx, name) => self.set_action_profile(id, idx, name),
-            Message::ToggleActionAllMonitors(id, idx, checked) => {
-                self.toggle_action_all_monitors(id, idx, checked)
-            }
-            Message::ToggleActionMonitor(id, idx, monitor_id, checked) => {
-                self.toggle_action_monitor(id, idx, monitor_id, checked)
-            }
-
-            Message::SetTurnOffBehavior(behavior) => {
-                self.config.turn_off_behavior = behavior;
-                self.config_dirty = true;
-            }
-            Message::ToggleStartWithWindows(enabled) => {
-                return self.set_windows_startup(enabled, self.config.start_minimized);
-            }
-            Message::ToggleStartMinimized(minimized) => {
-                return self.set_windows_startup(self.config.start_with_windows, minimized);
-            }
-
-            Message::SaveConfig => return self.save_config(),
             Message::ToggleSettings => {
                 self.set_show_context(!self.core.window.show_context);
             }
             Message::CloseSettings => self.set_show_context(false),
-            Message::ToggleHotkeys(enabled) => return self.toggle_hotkeys(enabled),
-            Message::RetryConfig => return self.retry_config(),
-            Message::RecoverConfigBackup => return self.recover_config_backup(),
-            Message::RequestResetConfig => {
-                self.pending_config_reset = self.config_store.recovery_error().is_some();
-            }
-            Message::CancelResetConfig => self.pending_config_reset = false,
-            Message::ConfirmResetConfig => return self.confirm_reset_config(),
-            Message::ConfigOpFinished(op, done) => return self.config_op_finished(op, done),
 
-            // -- Profiles ---------------------------------------------------
-            Message::RefreshProfiles => return self.refresh_profiles(),
-            Message::ProfilesListed(request, listed) => self.profiles_listed(request, listed),
-            Message::ProfileNameInput(value) => self.profile_name_input(value),
-            Message::SaveCurrentProfile(name) => return self.save_current_profile(name),
-            Message::ConfirmReplaceProfile => return self.confirm_replace_profile(),
-            Message::CancelReplaceProfile => self.cancel_replace_profile(),
-            Message::ApplyProfile(name) => return self.apply_profile(name),
-            Message::RequestDeleteProfile(name) => self.request_delete_profile(name),
-            Message::CancelDeleteProfile => self.cancel_delete_profile(),
-            Message::DeleteProfile(name) => return self.delete_profile(name),
-            Message::AddProfileHotkey(profile_name) => self.add_profile_hotkey(profile_name),
             // -- Hide window (close-to-tray) --------------------------------
             Message::HideWindow => {
                 log::info!("Hiding window to tray");
@@ -624,18 +284,14 @@ impl cosmic::Application for AppModel {
                         }
                     }
                     TrayMessage::LoadProfile(name) => {
-                        return self.update(Message::ApplyProfile(name));
+                        return self.update(Message::Data(Input::ApplyProfile(name)));
                     }
                     TrayMessage::SaveCurrentProfile => {
-                        if let Some(position) = self.nav_position_of(Page::Profiles) {
-                            self.nav.activate_position(position);
-                        }
+                        self.activate_page(Page::Profiles);
                         return self.update(Message::Tray(TrayMessage::ShowWindow));
                     }
                     TrayMessage::TurnOffMonitors => {
-                        return self.enqueue_hardware_jobs([HardwareJob::SoftTurnOff {
-                            monitor_ids: self.detected_monitors.iter().map(|m| m.id).collect(),
-                        }]);
+                        return self.update(Message::Data(Input::TurnOffMonitors));
                     }
                     TrayMessage::Exit => {
                         log::info!("Tray: Exit requested");
@@ -646,15 +302,19 @@ impl cosmic::Application for AppModel {
 
             Message::ConfigPathInput => {}
             Message::CopyConfigPath => {
-                self.status_message = "Copied configuration path".into();
-                return cosmic::iced::clipboard::write(self.config_path.clone());
+                let effects = self.state.update(Input::ConfigPathCopied);
+                return cosmic::app::Task::batch([
+                    self.run_effects(effects),
+                    cosmic::iced::clipboard::write(self.state.config_path().to_string()),
+                ]);
             }
             Message::OpenUrl(url) => {
                 if let Err(error) = std::process::Command::new("rundll32.exe")
                     .args(["url.dll,FileProtocolHandler", &url])
                     .spawn()
                 {
-                    self.status_message = format!("Failed to open URL: {error}");
+                    let effects = self.state.update(Input::OpenUrlFailed(error.to_string()));
+                    return self.run_effects(effects);
                 }
             }
         }
@@ -685,10 +345,10 @@ impl cosmic::Application for AppModel {
         };
 
         // Wrap in a container with status bar at the bottom
-        let status_bar = widget::text::caption(&self.status_message);
+        let status_bar = widget::text::caption(self.state.status_message());
 
         let mut layout = widget::column::with_capacity(4);
-        let recovering = self.config_store.recovery_error().is_some();
+        let recovering = self.state.recovery_error().is_some();
         if recovering {
             layout = layout.push(self.view_config_recovery());
         }
@@ -718,12 +378,13 @@ impl cosmic::Application for AppModel {
             crate::icons::AppIcon::Refresh,
             "Refresh",
             false,
-            Message::RefreshMonitors,
+            Message::Data(Input::RefreshMonitors),
         )]
     }
 
     fn header_end(&self) -> Vec<Element<'_, Self::Message>> {
-        let save_tip = if self.config_dirty {
+        let dirty = self.state.config_dirty();
+        let save_tip = if dirty {
             "Save configuration (unsaved changes)"
         } else {
             "Save configuration"
@@ -732,8 +393,8 @@ impl cosmic::Application for AppModel {
             crate::icons::header_icon_button(
                 crate::icons::AppIcon::Save,
                 save_tip,
-                self.config_dirty,
-                Message::SaveConfig,
+                dirty,
+                Message::Data(Input::SaveConfig),
             ),
             crate::icons::header_icon_button(
                 crate::icons::AppIcon::Settings,
@@ -760,32 +421,17 @@ impl cosmic::Application for AppModel {
 // ---------------------------------------------------------------------------
 
 impl AppModel {
-    // -----------------------------------------------------------------------
-    // Hotkey action handler
-    // -----------------------------------------------------------------------
-
-    fn nav_position_of(&self, target: Page) -> Option<u16> {
-        self.nav.iter().find_map(|id| {
+    pub(crate) fn activate_page(&mut self, target: Page) {
+        let position = self.nav.iter().find_map(|id| {
             if self.nav.data::<Page>(id) == Some(&target) {
                 self.nav.position(id)
             } else {
                 None
             }
-        })
-    }
-
-    fn handle_hotkey_actions(
-        &mut self,
-        actions: Vec<HotkeyActionSpec>,
-    ) -> cosmic::app::Task<Message> {
-        if let Err(error) = self
-            .action_executor
-            .enqueue_actions(actions, self.config.turn_off_behavior)
-        {
-            self.status_message = format!("Hotkey not dispatched: {error}");
-            return cosmic::app::Task::none();
+        });
+        if let Some(position) = position {
+            self.nav.activate_position(position);
         }
-        self.start_next_hardware_job()
     }
 
     // -----------------------------------------------------------------------

@@ -1,8 +1,7 @@
-use super::actions::HardwareOutcome;
-use super::coordination::{HardwareResult, QueueEvent, WindowsHardware};
-use super::{AppModel, Message};
+use super::{AppState, Effect, Job, JobKind};
+use crate::actions::{HardwareJob, HardwareOutcome};
+use crate::coordination::{HardwareResult, QueueEvent};
 use crate::ddc::MonitorState;
-use cosmic::Application;
 
 /// Only completed, successful writes may change confirmed values. In particular,
 /// a scalar write cannot establish the maximum that a failed read did not provide.
@@ -44,16 +43,13 @@ fn apply_current_outcome(
     }
 }
 
-impl AppModel {
-    pub(super) fn enqueue_hardware_jobs(
-        &mut self,
-        jobs: impl IntoIterator<Item = super::HardwareJob>,
-    ) -> cosmic::app::Task<Message> {
+impl AppState {
+    pub(super) fn enqueue_hardware_jobs(&mut self, jobs: impl IntoIterator<Item = HardwareJob>) {
         if let Err(error) = self.action_executor.enqueue_ui(jobs.into_iter().collect()) {
             self.status_message = error;
-            return cosmic::app::Task::none();
+            return;
         }
-        self.start_next_hardware_job()
+        self.start_next_hardware_job();
     }
 
     pub(super) fn sync_hardware_generation(&mut self) {
@@ -66,39 +62,25 @@ impl AppModel {
         }
     }
 
-    pub(super) fn start_next_hardware_job(&mut self) -> cosmic::app::Task<Message> {
+    pub(super) fn start_next_hardware_job(&mut self) {
         let work = self.action_executor.start_next(&self.monitors);
         self.sync_hardware_generation();
-        let Some(work) = work else {
-            return cosmic::app::Task::none();
-        };
-        let id = work.id;
-        cosmic::app::Task::perform(
-            async move { tokio::task::spawn_blocking(move || work.execute(&mut WindowsHardware)).await },
-            move |result| {
-                cosmic::Action::App(Message::HardwareJobFinished(
-                    id,
-                    match result {
-                        Ok(result) => result,
-                        Err(error) => Err(format!("Task join error: {error}")),
-                    },
-                ))
-            },
-        )
+        if let Some(work) = work {
+            self.emit(Effect::Spawn(Job(JobKind::Hardware(work))));
+        }
     }
 
     pub(super) fn hardware_job_finished(
         &mut self,
         id: u64,
         result: Result<HardwareResult, String>,
-    ) -> cosmic::app::Task<Message> {
+    ) {
         let event = self.action_executor.finish(id, result);
         self.sync_hardware_generation();
-        let mut follow_up = Vec::new();
         match event {
             QueueEvent::Ignored => {}
             QueueEvent::Discovered(Ok(infos)) => {
-                follow_up.push(self.monitors_detected(self.monitor_generation, infos));
+                self.monitors_detected(self.monitor_generation, infos);
             }
             QueueEvent::Discovered(Err(error)) => {
                 for info in &self.detected_monitors {
@@ -108,10 +90,10 @@ impl AppModel {
                     format!("Discovery failed; dependent jobs canceled. Retry refresh: {error}");
             }
             QueueEvent::Read(key, Ok(state)) => {
-                follow_up.push(self.monitor_state_loaded(self.monitor_generation, key, *state));
+                self.monitor_state_loaded(self.monitor_generation, key, *state);
             }
             QueueEvent::Read(key, Err(error)) => {
-                follow_up.push(self.monitor_state_failed(self.monitor_generation, key, error));
+                self.monitor_state_failed(self.monitor_generation, key, error);
             }
             QueueEvent::Applied(result) => {
                 apply_current_outcome(
@@ -123,11 +105,10 @@ impl AppModel {
                 self.hardware_outcome_status(result);
             }
         }
-        follow_up.push(self.start_next_hardware_job());
+        self.start_next_hardware_job();
         if self.action_executor.is_idle() && std::mem::take(&mut self.refresh_profiles_after_jobs) {
-            follow_up.push(self.update(Message::RefreshProfiles));
+            self.refresh_profiles();
         }
-        cosmic::app::Task::batch(follow_up)
     }
 
     fn hardware_outcome_status(&mut self, result: Result<HardwareOutcome, String>) {
@@ -177,14 +158,14 @@ impl AppModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::actions::{ActionExecutor, HardwareJob};
-    use crate::app::debounce::SliderDebounce;
-    use crate::app::monitor_views::{
-        MonitorPending, PendingValue, input_presentation, scalar_presentation,
-    };
+    use crate::actions::ActionExecutor;
     use crate::ddc::{
         InputSource,
-        tests::{key, monitor_state},
+        test_util::{key, monitor_state},
+    };
+    use crate::debounce::SliderDebounce;
+    use crate::presentation::{
+        MonitorPending, PendingValue, input_presentation, scalar_presentation,
     };
 
     #[test]

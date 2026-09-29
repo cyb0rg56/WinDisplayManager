@@ -1,23 +1,15 @@
-use super::config_ops::ConfigOp;
-use super::{AppModel, Message};
-use crate::config::TurnOffBehavior;
+use crate::{AppModel, Message};
 use cosmic::Element;
 use cosmic::iced::Length;
 use cosmic::widget;
+use data::config::TurnOffBehavior;
+use data::state::Input;
 
 impl AppModel {
-    /// Persist startup settings and keep the per-user Run key in step.
-    pub(super) fn set_windows_startup(
-        &mut self,
-        enabled: bool,
-        minimized: bool,
-    ) -> cosmic::app::Task<Message> {
-        self.enqueue_config_op(ConfigOp::SetStartup { enabled, minimized })
-    }
-
     /// Settings shown in the header context drawer.
     pub(super) fn view_settings(&self) -> Element<'_, Message> {
         let space_s = cosmic::theme::spacing().space_s;
+        let config = self.state.config();
 
         let description =
             widget::text::body("Configure startup, hotkeys, and how displays are turned off.");
@@ -27,7 +19,8 @@ impl AppModel {
             cosmic::widget::settings::item::builder("Enable global hotkeys")
                 .description("When disabled, hotkeys will not trigger any actions")
                 .control(
-                    widget::toggler(self.config.hotkeys_enabled).on_toggle(Message::ToggleHotkeys),
+                    widget::toggler(config.hotkeys_enabled)
+                        .on_toggle(|enabled| Message::Data(Input::ToggleHotkeys(enabled))),
                 ),
         );
 
@@ -37,13 +30,13 @@ impl AppModel {
             .collect();
         let selected_turn_off = TurnOffBehavior::ALL
             .iter()
-            .position(|behavior| behavior == &self.config.turn_off_behavior);
+            .position(|behavior| behavior == &config.turn_off_behavior);
         let power_section = cosmic::widget::settings::section()
             .title("Turn Off Displays")
             .add(
                 cosmic::widget::settings::item::builder("Power-off method").control(
                     widget::dropdown(turn_off_labels, selected_turn_off, |selected| {
-                        Message::SetTurnOffBehavior(TurnOffBehavior::ALL[selected])
+                        Message::Data(Input::SetTurnOffBehavior(TurnOffBehavior::ALL[selected]))
                     }),
                 ),
             );
@@ -52,17 +45,18 @@ impl AppModel {
             cosmic::widget::settings::item::builder("Start with Windows")
                 .description("Launch when you sign in")
                 .control(
-                    widget::toggler(self.config.start_with_windows)
-                        .on_toggle(Message::ToggleStartWithWindows),
+                    widget::toggler(config.start_with_windows)
+                        .on_toggle(|enabled| Message::Data(Input::ToggleStartWithWindows(enabled))),
                 ),
         );
-        if self.config.start_with_windows {
+        if config.start_with_windows {
             startup_section = startup_section.add(
                 cosmic::widget::settings::item::builder("Start minimized")
                     .description("Stay in the system tray until you open it")
                     .control(
-                        widget::toggler(self.config.start_minimized)
-                            .on_toggle(Message::ToggleStartMinimized),
+                        widget::toggler(config.start_minimized).on_toggle(|minimized| {
+                            Message::Data(Input::ToggleStartMinimized(minimized))
+                        }),
                     ),
             );
         }
