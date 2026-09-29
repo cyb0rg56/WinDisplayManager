@@ -80,13 +80,14 @@ impl HotkeyManager {
         self.action_map = Arc::new(action_map);
 
         // Recompute per-config-hotkey active status by re-deriving the OS id
-        // from each binding and checking whether it registered successfully.
+        // from each binding. Only the first owner of a duplicated binding is active.
         let mut status = HashMap::new();
+        let mut claimed = HashSet::new();
         for cfg_hotkey in &config.hotkeys.hotkeys {
             let active = cfg_hotkey
                 .binding
                 .to_hotkey()
-                .is_some_and(|hk| registered_ids.contains(&hk.id()));
+                .is_some_and(|hk| registered_ids.contains(&hk.id()) && claimed.insert(hk.id()));
             status.insert(cfg_hotkey.id.clone(), active);
         }
         self.status = status;

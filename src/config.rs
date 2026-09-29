@@ -646,8 +646,6 @@ pub struct AppConfig {
     #[serde(default)]
     schema_version: u32,
     pub hotkeys: HotkeyConfig,
-    /// Refresh interval in seconds for polling monitor state (0 = disabled).
-    pub refresh_interval_secs: u64,
     /// Whether global hotkeys are enabled.
     #[serde(default = "default_hotkeys_enabled")]
     pub hotkeys_enabled: bool,
@@ -672,7 +670,6 @@ impl Default for AppConfig {
         Self {
             schema_version: SCHEMA_VERSION,
             hotkeys: HotkeyConfig::default(),
-            refresh_interval_secs: 0,
             hotkeys_enabled: true,
             turn_off_behavior: TurnOffBehavior::default(),
             start_with_windows: false,
@@ -687,9 +684,10 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// Path to the JSON configuration file.
-    pub fn config_path() -> PathBuf {
-        let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-        base.join("windisplaymanager").join("config.json")
+    pub fn config_path() -> io::Result<PathBuf> {
+        Ok(persistence::config_base_dir()?
+            .join("windisplaymanager")
+            .join("config.json"))
     }
 
     pub fn load_from(path: &Path) -> LoadOutcome<Self> {
@@ -714,7 +712,7 @@ impl AppConfig {
 
 /// The write gate survives failed loads, including subsequent removal of the
 /// bad file. Only an explicit retry, backup recovery, or confirmed reset clears it.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConfigStore {
     path: PathBuf,
     recovery_error: Option<String>,
@@ -730,6 +728,15 @@ impl ConfigStore {
         (store, outcome)
     }
 
+    /// A store with no usable path stays in recovery, so nothing is written.
+    pub fn unavailable(error: io::Error) -> (Self, LoadOutcome<AppConfig>) {
+        let store = Self {
+            path: PathBuf::new(),
+            recovery_error: Some(error.to_string()),
+        };
+        (store, LoadOutcome::Failed(error))
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -739,6 +746,15 @@ impl ConfigStore {
     }
 
     pub fn retry(&mut self) -> LoadOutcome<AppConfig> {
+        if self.path.as_os_str().is_empty() {
+            match AppConfig::config_path() {
+                Ok(path) => self.path = path,
+                Err(error) => {
+                    self.recovery_error = Some(error.to_string());
+                    return LoadOutcome::Failed(error);
+                }
+            }
+        }
         let outcome = AppConfig::load_from(&self.path);
         self.recovery_error = match &outcome {
             LoadOutcome::Failed(error) => Some(error.to_string()),
@@ -781,7 +797,7 @@ impl ConfigStore {
     }
 
     pub fn recover_backup(&mut self) -> io::Result<AppConfig> {
-        let backup = persistence::backup_path(&self.path);
+        let backup = persistence::backup_path(self.resolved_path()?);
         let config = match AppConfig::load_from(&backup) {
             LoadOutcome::Loaded(config) => config,
             LoadOutcome::Missing => {
@@ -805,9 +821,19 @@ impl ConfigStore {
 
     fn replace_for_recovery(&mut self, config: &AppConfig) -> io::Result<()> {
         let bytes = serde_json::to_vec_pretty(config).map_err(persistence::invalid_data)?;
-        persistence::atomic_write(&self.path, &bytes, WriteMode::Replace)?;
+        persistence::atomic_write(self.resolved_path()?, &bytes, WriteMode::Replace)?;
         self.recovery_error = None;
         Ok(())
+    }
+
+    fn resolved_path(&self) -> io::Result<&Path> {
+        if self.path.as_os_str().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Configuration path is unavailable; retry first",
+            ));
+        }
+        Ok(&self.path)
     }
 }
 
@@ -816,11 +842,21 @@ impl ConfigStore {
 // ---------------------------------------------------------------------------
 
 /// Build a mapping from global-hotkey OS id → the hotkey's action chain.
+/// A hand-edited config may repeat a binding; the first occurrence wins.
 pub fn build_hotkey_map(config: &HotkeyConfig) -> HashMap<u32, (HotKey, Vec<HotkeyActionSpec>)> {
     let mut map = HashMap::new();
     for hotkey in &config.hotkeys {
         if let Some(hk) = hotkey.binding.to_hotkey() {
-            map.insert(hk.id(), (hk, hotkey.actions.clone()));
+            match map.entry(hk.id()) {
+                std::collections::hash_map::Entry::Occupied(_) => log::warn!(
+                    "Hotkey '{}' duplicates binding {}; ignoring it",
+                    hotkey.id,
+                    hotkey.binding
+                ),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert((hk, hotkey.actions.clone()));
+                }
+            }
         }
     }
     map
@@ -934,6 +970,27 @@ mod tests {
     use super::*;
     use crate::persistence::{backup_path, tests::TestDir};
     use std::fs;
+
+    #[test]
+    fn duplicate_bindings_keep_the_first_action_chain() {
+        let binding = HotkeyBinding {
+            ctrl: true,
+            key: "F1".into(),
+            ..HotkeyBinding::unbound()
+        };
+        let mut first = Hotkey::new_for_profile("first".into());
+        first.binding = binding.clone();
+        let mut second = Hotkey::new_for_profile("second".into());
+        second.binding = binding.clone();
+        let config = HotkeyConfig {
+            hotkeys: vec![first, second],
+            ..HotkeyConfig::default()
+        };
+        let map = build_hotkey_map(&config);
+        assert_eq!(map.len(), 1);
+        let (_, actions) = &map[&binding.to_hotkey().unwrap().id()];
+        assert_eq!(actions[0].profile_name, "first");
+    }
 
     #[test]
     fn startup_flags_default_off_when_missing_from_saved_config() {

@@ -157,6 +157,15 @@ impl AppModel {
                 self.profile_name_input.clear();
                 self.refresh_profiles_after_jobs = true;
             }
+            Ok(HardwareOutcome::ProfileExists { name }) => {
+                self.status_message =
+                    format!("Profile '{name}' already exists. Confirm replacement.");
+                self.pending_profile_replace = Some(name);
+            }
+            Ok(HardwareOutcome::ProfileDeleted { name }) => {
+                self.status_message = format!("Deleted profile '{name}'.");
+                self.refresh_profiles_after_jobs = true;
+            }
             Ok(HardwareOutcome::MonitorsPoweredOff) => {
                 self.status_message = "Monitors turned off.".into();
             }

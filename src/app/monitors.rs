@@ -121,44 +121,51 @@ impl AppModel {
         cosmic::app::Task::none()
     }
 
-    pub(super) fn brightness_slider_changed(
+    pub(super) fn slider_changed(
         &mut self,
         monitor_id: u32,
+        feature: SliderFeature,
         value: u16,
     ) -> cosmic::app::Task<Message> {
         if !self.action_executor.accepts_monitor(monitor_id) {
             return cosmic::app::Task::none();
         }
-        let token = self.slider_debounce.record(
-            self.monitor_generation,
-            monitor_id,
-            SliderFeature::Brightness,
-            value,
-        );
+        let token =
+            self.slider_debounce
+                .record(self.monitor_generation, monitor_id, feature, value);
 
         cosmic::app::Task::perform(
             async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
                 token
             },
-            move |token| cosmic::Action::App(Message::ApplyBrightnessDebounced(monitor_id, token)),
+            move |token| {
+                cosmic::Action::App(match feature {
+                    SliderFeature::Brightness => {
+                        Message::ApplyBrightnessDebounced(monitor_id, token)
+                    }
+                    SliderFeature::Contrast => Message::ApplyContrastDebounced(monitor_id, token),
+                })
+            },
         )
     }
 
-    pub(super) fn apply_brightness_debounced(
+    pub(super) fn apply_slider_debounced(
         &mut self,
         monitor_id: u32,
+        feature: SliderFeature,
         token: DebounceToken,
     ) -> cosmic::app::Task<Message> {
-        if let Some(value) = self.slider_debounce.take_current(
-            self.monitor_generation,
-            monitor_id,
-            SliderFeature::Brightness,
-            token,
-        ) {
-            return self.update(Message::SetBrightness(monitor_id, value));
+        let Some(value) =
+            self.slider_debounce
+                .take_current(self.monitor_generation, monitor_id, feature, token)
+        else {
+            return cosmic::app::Task::none();
+        };
+        match feature {
+            SliderFeature::Brightness => self.set_brightness(monitor_id, value),
+            SliderFeature::Contrast => self.set_contrast(monitor_id, value),
         }
-        cosmic::app::Task::none()
     }
 
     pub(super) fn set_brightness(
@@ -167,46 +174,6 @@ impl AppModel {
         value: u16,
     ) -> cosmic::app::Task<Message> {
         self.enqueue_hardware_jobs([super::HardwareJob::SetBrightness { monitor_id, value }])
-    }
-
-    pub(super) fn contrast_slider_changed(
-        &mut self,
-        monitor_id: u32,
-        value: u16,
-    ) -> cosmic::app::Task<Message> {
-        if !self.action_executor.accepts_monitor(monitor_id) {
-            return cosmic::app::Task::none();
-        }
-        let token = self.slider_debounce.record(
-            self.monitor_generation,
-            monitor_id,
-            SliderFeature::Contrast,
-            value,
-        );
-
-        cosmic::app::Task::perform(
-            async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-                token
-            },
-            move |token| cosmic::Action::App(Message::ApplyContrastDebounced(monitor_id, token)),
-        )
-    }
-
-    pub(super) fn apply_contrast_debounced(
-        &mut self,
-        monitor_id: u32,
-        token: DebounceToken,
-    ) -> cosmic::app::Task<Message> {
-        if let Some(value) = self.slider_debounce.take_current(
-            self.monitor_generation,
-            monitor_id,
-            SliderFeature::Contrast,
-            token,
-        ) {
-            return self.update(Message::SetContrast(monitor_id, value));
-        }
-        cosmic::app::Task::none()
     }
 
     pub(super) fn set_contrast(

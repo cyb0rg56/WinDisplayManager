@@ -3,21 +3,36 @@ use crate::profiles;
 
 impl AppModel {
     pub(super) fn refresh_profiles(&mut self) -> cosmic::app::Task<Message> {
+        self.profiles_request = self.profiles_request.wrapping_add(1);
+        let request = self.profiles_request;
         cosmic::app::Task::perform(
             async { tokio::task::spawn_blocking(profiles::list_profiles).await },
-            |result| match result {
-                Ok(list) => cosmic::Action::App(Message::ProfilesListed(list)),
-                Err(error) => {
-                    cosmic::Action::App(Message::Error(format!("Task join error: {error}")))
-                }
+            move |result| {
+                let listed = match result {
+                    Ok(Ok(list)) => Ok(list),
+                    Ok(Err(error)) => Err(format!("List profiles error: {error}")),
+                    Err(error) => Err(format!("Task join error: {error}")),
+                };
+                cosmic::Action::App(Message::ProfilesListed(request, listed))
             },
         )
     }
 
-    pub(super) fn profiles_listed(&mut self, profiles: Vec<String>) {
-        self.profiles = profiles;
-        if let Some((tray, _)) = &self.tray {
-            tray.update_menu(&self.profiles);
+    pub(super) fn profiles_listed(&mut self, request: u64, listed: Result<Vec<String>, String>) {
+        if request != self.profiles_request {
+            return;
+        }
+        match listed {
+            Ok(profiles) => {
+                self.profiles = profiles;
+                if let Some((tray, _)) = &self.tray {
+                    tray.update_menu(&self.profiles);
+                }
+            }
+            Err(error) => {
+                log::error!("{error}");
+                self.status_message = error;
+            }
         }
     }
 
@@ -31,25 +46,13 @@ impl AppModel {
             self.status_message = "Enter a profile name first.".into();
             return cosmic::app::Task::none();
         }
-        match profiles::profile_exists(&name) {
-            Ok(true) => {
-                self.status_message =
-                    format!("Profile '{name}' already exists. Confirm replacement.");
-                self.pending_profile_replace = Some(name);
-                cosmic::app::Task::none()
-            }
-            Ok(false) => {
-                self.status_message = format!("Saving profile '{name}'...");
-                self.enqueue_hardware_jobs([super::HardwareJob::SaveProfile {
-                    name,
-                    replace: false,
-                }])
-            }
-            Err(error) => {
-                self.status_message = format!("Invalid profile name: {error}");
-                cosmic::app::Task::none()
-            }
-        }
+        // The worker reports an existing profile, which prompts for replacement.
+        self.pending_profile_replace = None;
+        self.status_message = format!("Saving profile '{name}'...");
+        self.enqueue_hardware_jobs([super::HardwareJob::SaveProfile {
+            name,
+            replace: false,
+        }])
     }
 
     pub(super) fn confirm_replace_profile(&mut self) -> cosmic::app::Task<Message> {
@@ -83,17 +86,7 @@ impl AppModel {
 
     pub(super) fn delete_profile(&mut self, name: String) -> cosmic::app::Task<Message> {
         self.pending_profile_delete = None;
-        cosmic::app::Task::perform(
-            async move { tokio::task::spawn_blocking(move || profiles::delete_profile(&name)).await },
-            |result| match result {
-                Ok(Ok(())) => cosmic::Action::App(Message::RefreshProfiles),
-                Ok(Err(error)) => {
-                    cosmic::Action::App(Message::Error(format!("Delete profile error: {error}")))
-                }
-                Err(error) => {
-                    cosmic::Action::App(Message::Error(format!("Task join error: {error}")))
-                }
-            },
-        )
+        self.status_message = format!("Deleting profile '{name}'...");
+        self.enqueue_hardware_jobs([super::HardwareJob::DeleteProfile { name }])
     }
 }

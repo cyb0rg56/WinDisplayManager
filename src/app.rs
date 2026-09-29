@@ -1,4 +1,5 @@
 mod actions;
+mod config_ops;
 mod coordination;
 mod debounce;
 mod hardware_queue;
@@ -14,7 +15,7 @@ mod views;
 
 use self::actions::HardwareJob;
 use self::coordination::{HardwareCoordinator, HardwareResult};
-use self::debounce::{DebounceToken, SliderDebounce};
+use self::debounce::{DebounceToken, SliderDebounce, SliderFeature};
 
 use crate::config::{
     ActionTarget, ActionType, AppConfig, ConfigStore, HotkeyActionSpec, MonitorTarget,
@@ -68,8 +69,6 @@ pub enum Message {
     // Monitor controls
     RefreshMonitors,
     RetryMonitor(u32),
-    SetBrightness(u32, u16),
-    SetContrast(u32, u16),
     SelectInputSource(u32, InputSource),
     HardwareJobFinished(u64, Result<HardwareResult, String>),
     // Debounced slider changes
@@ -115,9 +114,10 @@ pub enum Message {
     RequestResetConfig,
     CancelResetConfig,
     ConfirmResetConfig,
+    ConfigOpFinished(config_ops::ConfigOp, config_ops::ConfigOpDone),
     // Profiles
     RefreshProfiles,
-    ProfilesListed(Vec<String>),
+    ProfilesListed(u64, Result<Vec<String>, String>),
     ProfileNameInput(String),
     SaveCurrentProfile(String),
     ConfirmReplaceProfile,
@@ -136,8 +136,6 @@ pub enum Message {
     /// Discard edits to the read-only configuration path field.
     ConfigPathInput,
     CopyConfigPath,
-    // Errors
-    Error(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +161,8 @@ pub struct AppModel {
     monitor_load_errors: HashMap<u32, String>,
     config: AppConfig,
     config_store: ConfigStore,
+    config_ops: std::collections::VecDeque<config_ops::ConfigOp>,
+    config_op_active: bool,
     pending_config_reset: bool,
     hotkey_manager: Option<HotkeyManager>,
     hotkey_action_map: Arc<HashMap<u32, Vec<HotkeyActionSpec>>>,
@@ -179,6 +179,7 @@ pub struct AppModel {
     about: widget::about::About,
     slider_debounce: SliderDebounce,
     profiles: Vec<String>,
+    profiles_request: u64,
     profile_name_input: String,
     pending_profile_delete: Option<String>,
     pending_profile_replace: Option<String>,
@@ -209,7 +210,10 @@ impl cosmic::Application for AppModel {
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, cosmic::app::Task<Self::Message>) {
         // Load persistent config
-        let (config_store, outcome) = ConfigStore::open(AppConfig::config_path());
+        let (config_store, outcome) = match AppConfig::config_path() {
+            Ok(path) => ConfigStore::open(path),
+            Err(error) => ConfigStore::unavailable(error),
+        };
         let config = match outcome {
             LoadOutcome::Missing => AppConfig::default(),
             LoadOutcome::Loaded(config) => config,
@@ -284,6 +288,8 @@ impl cosmic::Application for AppModel {
             monitor_load_errors: HashMap::new(),
             config,
             config_store,
+            config_ops: Default::default(),
+            config_op_active: false,
             pending_config_reset: false,
             hotkey_manager,
             hotkey_action_map,
@@ -300,6 +306,7 @@ impl cosmic::Application for AppModel {
             about,
             slider_debounce: SliderDebounce::default(),
             profiles: Vec::new(),
+            profiles_request: 0,
             profile_name_input: String::new(),
             pending_profile_delete: None,
             pending_profile_replace: None,
@@ -475,23 +482,19 @@ impl cosmic::Application for AppModel {
 
             // -- Brightness -------------------------------------------------
             Message::BrightnessSliderChanged(monitor_id, value) => {
-                return self.brightness_slider_changed(monitor_id, value);
+                return self.slider_changed(monitor_id, SliderFeature::Brightness, value);
             }
             Message::ApplyBrightnessDebounced(monitor_id, token) => {
-                return self.apply_brightness_debounced(monitor_id, token);
-            }
-            Message::SetBrightness(monitor_id, value) => {
-                return self.set_brightness(monitor_id, value);
+                return self.apply_slider_debounced(monitor_id, SliderFeature::Brightness, token);
             }
 
             // -- Contrast ---------------------------------------------------
             Message::ContrastSliderChanged(monitor_id, value) => {
-                return self.contrast_slider_changed(monitor_id, value);
+                return self.slider_changed(monitor_id, SliderFeature::Contrast, value);
             }
             Message::ApplyContrastDebounced(monitor_id, token) => {
-                return self.apply_contrast_debounced(monitor_id, token);
+                return self.apply_slider_debounced(monitor_id, SliderFeature::Contrast, token);
             }
-            Message::SetContrast(monitor_id, value) => return self.set_contrast(monitor_id, value),
 
             // -- Input source -----------------------------------------------
             Message::SelectInputSource(monitor_id, source) => {
@@ -565,17 +568,18 @@ impl cosmic::Application for AppModel {
             }
             Message::CloseSettings => self.set_show_context(false),
             Message::ToggleHotkeys(enabled) => return self.toggle_hotkeys(enabled),
-            Message::RetryConfig => self.retry_config(),
-            Message::RecoverConfigBackup => self.recover_config_backup(),
+            Message::RetryConfig => return self.retry_config(),
+            Message::RecoverConfigBackup => return self.recover_config_backup(),
             Message::RequestResetConfig => {
                 self.pending_config_reset = self.config_store.recovery_error().is_some();
             }
             Message::CancelResetConfig => self.pending_config_reset = false,
-            Message::ConfirmResetConfig => self.confirm_reset_config(),
+            Message::ConfirmResetConfig => return self.confirm_reset_config(),
+            Message::ConfigOpFinished(op, done) => return self.config_op_finished(op, done),
 
             // -- Profiles ---------------------------------------------------
             Message::RefreshProfiles => return self.refresh_profiles(),
-            Message::ProfilesListed(profiles) => self.profiles_listed(profiles),
+            Message::ProfilesListed(request, listed) => self.profiles_listed(request, listed),
             Message::ProfileNameInput(value) => self.profile_name_input(value),
             Message::SaveCurrentProfile(name) => return self.save_current_profile(name),
             Message::ConfirmReplaceProfile => return self.confirm_replace_profile(),
@@ -652,12 +656,6 @@ impl cosmic::Application for AppModel {
                 {
                     self.status_message = format!("Failed to open URL: {error}");
                 }
-            }
-
-            // -- Errors / misc ----------------------------------------------
-            Message::Error(msg) => {
-                log::error!("{msg}");
-                self.status_message = msg;
             }
         }
 

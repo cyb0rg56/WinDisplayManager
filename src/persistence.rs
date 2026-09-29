@@ -9,6 +9,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Per-user roaming app data. Never falls back to the working directory.
+pub fn config_base_dir() -> io::Result<PathBuf> {
+    dirs::config_dir().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Could not resolve the user application data directory",
+        )
+    })
+}
+
 #[derive(Debug)]
 pub enum LoadOutcome<T> {
     Missing,

@@ -51,6 +51,9 @@ pub enum HardwareJob {
         name: String,
         replace: bool,
     },
+    DeleteProfile {
+        name: String,
+    },
     SoftTurnOff {
         monitor_ids: Vec<u32>,
     },
@@ -165,6 +168,13 @@ pub enum HardwareOutcome {
     ProfileSaved {
         name: String,
     },
+    /// A create-new save found an existing profile; the user must confirm replacement.
+    ProfileExists {
+        name: String,
+    },
+    ProfileDeleted {
+        name: String,
+    },
     MonitorsPoweredOff,
 }
 
@@ -184,9 +194,17 @@ impl PreparedJob {
             return Ok(HardwareOutcome::ProfileApplied { name });
         }
         if let HardwareJob::SaveProfile { name, replace } = self.job {
-            profiles::save_current(&name, replace)
-                .map_err(|e| format!("Save profile error: {e}"))?;
-            return Ok(HardwareOutcome::ProfileSaved { name });
+            return match profiles::save_current(&name, replace) {
+                Ok(()) => Ok(HardwareOutcome::ProfileSaved { name }),
+                Err(profiles::ProfileError::AlreadyExists(_)) if !replace => {
+                    Ok(HardwareOutcome::ProfileExists { name })
+                }
+                Err(e) => Err(format!("Save profile error: {e}")),
+            };
+        }
+        if let HardwareJob::DeleteProfile { name } = self.job {
+            profiles::delete_profile(&name).map_err(|e| format!("Delete profile error: {e}"))?;
+            return Ok(HardwareOutcome::ProfileDeleted { name });
         }
         self.execute_monitor_job(ddc::Session::open, ccd::turn_off_monitors)
     }

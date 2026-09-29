@@ -124,12 +124,9 @@ impl HardwareCoordinator {
         if !self.accepts_monitor(id) {
             return false;
         }
-        let info = self
-            .available
-            .iter()
-            .find(|info| info.id == id)
-            .unwrap()
-            .clone();
+        let Some(info) = self.available.iter().find(|info| info.id == id).cloned() else {
+            return false;
+        };
         self.executor.extend([Queued::Read(self.generation, info)]);
         true
     }
@@ -213,7 +210,9 @@ impl HardwareCoordinator {
                     if job.generation == self.generation
                         || matches!(
                             job.job,
-                            HardwareJob::ApplyProfile { .. } | HardwareJob::SaveProfile { .. }
+                            HardwareJob::ApplyProfile { .. }
+                                | HardwareJob::SaveProfile { .. }
+                                | HardwareJob::DeleteProfile { .. }
                         ) =>
                 {
                     if matches!(job.job, HardwareJob::ApplyProfile { .. }) {
