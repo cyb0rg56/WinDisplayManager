@@ -1,12 +1,15 @@
 use super::hotkey_editor::{
     action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
 };
-use super::{AppModel, INPUT_SOURCES, Message, POWER_MODES, RecordingState};
+use super::{AppModel, Message, RecordingState};
 use crate::config::{
     ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyHeading, MonitorTarget,
     hotkey_headings,
 };
-use crate::ddc::PowerMode;
+use crate::ddc::{
+    FeatureOptions, InputSource, MonitorInfo, NO_SHARED_OPTION_NOTE, input_choices, power_options,
+    shared_input_choices,
+};
 use crate::icons::{self, AppIcon};
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
@@ -14,11 +17,56 @@ use cosmic::iced::{Alignment, Length};
 use cosmic::theme;
 use cosmic::widget;
 
-fn power_mode_index(mode: &PowerMode) -> Option<usize> {
-    POWER_MODES.iter().position(|candidate| candidate == mode)
+fn option_picker<T>(
+    choices: FeatureOptions<T>,
+    selected: T,
+    on_select: impl Fn(T) -> Message + Send + Sync + 'static,
+) -> Element<'static, Message>
+where
+    T: Clone + PartialEq + std::fmt::Display + Send + Sync + 'static,
+{
+    let mut column = widget::column::with_capacity(3).spacing(4.0);
+    let options = choices.options;
+    if choices.no_shared_option {
+        column = column.push(widget::text::caption(NO_SHARED_OPTION_NOTE));
+    }
+    if options.is_empty() {
+        return column.into();
+    }
+    let selected_index = options.iter().position(|option| option == &selected);
+    let labels: Vec<String> = options.iter().map(ToString::to_string).collect();
+    column
+        .push(widget::dropdown(labels, selected_index, move |index| {
+            on_select(options[index].clone())
+        }))
+        .into()
 }
 
 impl AppModel {
+    fn targeted_advertised_inputs(
+        &self,
+        action: &HotkeyActionSpec,
+    ) -> Vec<Option<Vec<InputSource>>> {
+        let infos: Vec<MonitorInfo> = if action.all_monitors {
+            self.detected_monitors.clone()
+        } else {
+            action
+                .explicit_targets()
+                .iter()
+                .filter_map(|target| target.resolve(&self.detected_monitors).ok().cloned())
+                .collect()
+        };
+        infos
+            .iter()
+            .filter_map(|info| {
+                self.monitors
+                    .iter()
+                    .find(|monitor| monitor.info.key == info.key)
+                    .map(|monitor| monitor.advertised_inputs.clone())
+            })
+            .collect()
+    }
+
     pub(super) fn view_hotkeys_current(&self) -> Element<'_, Message> {
         let space_s = cosmic::theme::spacing().space_s;
         let mut hotkeys = widget::column::with_capacity(self.config.hotkeys.hotkeys.len() + 1)
@@ -275,36 +323,21 @@ impl AppModel {
                     Some(input.into())
                 }
                 ActionTarget::InputSource if action.all_monitors => {
-                    let mut sources = INPUT_SOURCES.to_vec();
-                    if !sources.contains(&action.input_source) {
-                        sources.push(action.input_source);
-                    }
-                    let labels: Vec<String> = sources.iter().map(ToString::to_string).collect();
-                    let selected = sources
-                        .iter()
-                        .position(|value| value == &action.input_source);
-                    Some(
-                        widget::dropdown(labels, selected, {
-                            let id = id.clone();
-                            move |selected| {
-                                Message::SetActionInputSource(id.clone(), idx, sources[selected])
-                            }
-                        })
-                        .into(),
-                    )
+                    let choices = shared_input_choices(
+                        &self.targeted_advertised_inputs(action),
+                        Some(action.input_source),
+                    );
+                    let id = id.clone();
+                    Some(option_picker(choices, action.input_source, move |source| {
+                        Message::SetActionInputSource(id.clone(), idx, source)
+                    }))
                 }
                 ActionTarget::PowerMode => {
-                    let labels: Vec<String> = POWER_MODES.iter().map(ToString::to_string).collect();
-                    let selected = power_mode_index(&action.power_mode);
-                    Some(
-                        widget::dropdown(labels, selected, {
-                            let id = id.clone();
-                            move |selected| {
-                                Message::SetActionPowerMode(id.clone(), idx, POWER_MODES[selected])
-                            }
-                        })
-                        .into(),
-                    )
+                    let choices = power_options(Some(action.power_mode));
+                    let id = id.clone();
+                    Some(option_picker(choices, action.power_mode, move |mode| {
+                        Message::SetActionPowerMode(id.clone(), idx, mode)
+                    }))
                 }
                 ActionTarget::Profile => {
                     let mut profiles = self.profiles.clone();
@@ -450,24 +483,26 @@ impl AppModel {
                         .find(|input| input.monitor_id == monitor_id)
                         .map(|input| input.input_source)
                         .unwrap_or(action.input_source);
-                    let mut sources = INPUT_SOURCES.to_vec();
-                    if !sources.contains(&current) {
-                        sources.push(current);
-                    }
-                    let labels: Vec<String> = sources.iter().map(ToString::to_string).collect();
-                    let selected_source = sources.iter().position(|value| value == &current);
+                    let key = available.map(|info| info.key.clone());
+                    let monitor = key.and_then(|key| {
+                        self.monitors.iter().find(|monitor| monitor.info.key == key)
+                    });
+                    let choices = input_choices(
+                        monitor.and_then(|monitor| monitor.advertised_inputs.as_deref()),
+                        Some(current),
+                    );
                     displays = displays.push(
                         widget::row::with_capacity(2)
                             .push(widget::text::caption("Input source").width(Length::Fill))
-                            .push(widget::dropdown(labels, selected_source, {
+                            .push(option_picker(choices, current, {
                                 let id = id.clone();
                                 let target = monitor_id.clone();
-                                move |selected| {
+                                move |source| {
                                     Message::SetMonitorInput(
                                         id.clone(),
                                         idx,
                                         target.clone(),
-                                        Some(sources[selected]),
+                                        Some(source),
                                     )
                                 }
                             }))

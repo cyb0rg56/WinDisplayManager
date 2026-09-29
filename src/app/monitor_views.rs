@@ -1,14 +1,10 @@
 use super::debounce::{SliderDebounce, SliderFeature};
-use super::{AppModel, HardwareJob, INPUT_SOURCES, Message};
-use crate::ddc::InputSource;
+use super::{AppModel, HardwareJob, Message};
+use crate::ddc::{InputSource, input_choices};
 use cosmic::Element;
 use cosmic::iced::Length;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::widget;
-
-pub(super) fn input_source_index(source: &InputSource) -> Option<usize> {
-    INPUT_SOURCES.iter().position(|s| s == source)
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum PendingValue<T> {
@@ -202,34 +198,38 @@ impl AppModel {
                     mon.input_source_read_error.as_deref(),
                     pending.input_source,
                 );
-                let selected_idx = input.value.as_ref().and_then(input_source_index);
                 let mid = mon.info.id;
-
-                // Create labels as owned data
-                static INPUT_SOURCE_LABELS: &[&str] = &[
-                    "HDMI 1",
-                    "HDMI 2",
-                    "DisplayPort 1",
-                    "DisplayPort 2",
-                    "USB-C 1",
-                    "USB-C 2",
-                ];
-
-                let mut input_section = cosmic::widget::settings::section()
+                let inputs = input_choices(mon.advertised_inputs.as_deref(), input.value);
+                let sources = inputs.options;
+                let labels: Vec<String> = sources.iter().map(ToString::to_string).collect();
+                let selected_idx = input
+                    .value
+                    .as_ref()
+                    .and_then(|source| sources.iter().position(|candidate| candidate == source));
+                let control: Element<'_, Message> = if sources.is_empty() {
+                    widget::text::body("No input sources advertised").into()
+                } else {
+                    widget::dropdown(labels, selected_idx, move |idx| {
+                        Message::SelectInputSource(mid, sources[idx])
+                    })
+                    .into()
+                };
+                let mut section = cosmic::widget::settings::section()
                     .title("Input Source")
-                    .add(
-                        cosmic::widget::settings::item::builder(input.label).control(
-                            widget::dropdown(INPUT_SOURCE_LABELS, selected_idx, move |idx| {
-                                Message::SelectInputSource(mid, idx)
-                            }),
-                        ),
-                    );
+                    .add(cosmic::widget::settings::item::builder(input.label).control(control));
                 if let Some(error) = input.read_error {
-                    input_section = input_section.add(widget::text::body(format!(
+                    section = section.add(widget::text::body(format!(
                         "Could not read input source: {error}"
                     )));
                 }
+                let input_section = section;
 
+                let mut content = widget::column::with_capacity(6)
+                    .push(header)
+                    .push(resolution_label)
+                    .spacing(space_s)
+                    .width(Length::Fill);
+                content = content.push(input_section);
                 let brightness = scalar_presentation(
                     mon.brightness,
                     mon.brightness_max,
@@ -256,7 +256,7 @@ impl AppModel {
                         "Could not read brightness: {error}"
                     )));
                 }
-
+                content = content.push(brightness_section);
                 let contrast = scalar_presentation(
                     mon.contrast,
                     mon.contrast_max,
@@ -283,15 +283,7 @@ impl AppModel {
                         "Could not read contrast: {error}"
                     )));
                 }
-
-                let mut content = widget::column::with_capacity(6)
-                    .push(header)
-                    .push(resolution_label)
-                    .push(input_section)
-                    .push(brightness_section)
-                    .push(contrast_section)
-                    .spacing(space_s)
-                    .width(Length::Fill);
+                content = content.push(contrast_section);
                 if let Some(error) = self.monitor_load_errors.get(&monitor_id) {
                     content = content.push(widget::text::body(format!(
                         "Could not refresh monitor: {error}"
@@ -310,7 +302,12 @@ impl AppModel {
 mod tests {
     use super::*;
     use crate::app::actions::ActionExecutor;
+    use crate::ddc::STANDARD_INPUT_SOURCES;
     use crate::ddc::tests::monitor_state;
+
+    fn input_source_index(source: &InputSource) -> Option<usize> {
+        STANDARD_INPUT_SOURCES.iter().position(|s| s == source)
+    }
 
     #[test]
     fn partial_read_failure_hides_only_failed_slider_and_can_recover() {
@@ -397,7 +394,7 @@ mod tests {
                 input.value.as_ref().and_then(input_source_index),
                 Some(index)
             );
-            assert_eq!(INPUT_SOURCES[index], source);
+            assert_eq!(STANDARD_INPUT_SOURCES[index], source);
             assert_eq!(input.label, label);
             assert_eq!(input.read_error, None);
         }

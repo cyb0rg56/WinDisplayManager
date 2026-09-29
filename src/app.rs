@@ -68,11 +68,9 @@ pub enum Message {
     // Monitor controls
     RefreshMonitors,
     RetryMonitor(u32),
-
     SetBrightness(u32, u16),
     SetContrast(u32, u16),
-    SelectInputSource(u32, usize), // monitor_id, index into INPUT_SOURCES
-    SetInputSource(u32, InputSource),
+    SelectInputSource(u32, InputSource),
     HardwareJobFinished(u64, Result<HardwareResult, String>),
     // Debounced slider changes
     BrightnessSliderChanged(u32, u16),
@@ -189,23 +187,6 @@ pub struct AppModel {
     // System tray
     tray: Option<(SystemTray, TrayStream)>,
 }
-
-// List of input sources shown in the dropdown
-const INPUT_SOURCES: &[InputSource] = &[
-    InputSource::Hdmi1,
-    InputSource::Hdmi2,
-    InputSource::Dp1,
-    InputSource::Dp2,
-    InputSource::UsbC1,
-    InputSource::UsbC2,
-];
-
-const POWER_MODES: &[PowerMode] = &[
-    PowerMode::On,
-    PowerMode::Standby,
-    PowerMode::Suspend,
-    PowerMode::Off,
-];
 
 // ---------------------------------------------------------------------------
 // cosmic::Application implementation
@@ -513,10 +494,7 @@ impl cosmic::Application for AppModel {
             Message::SetContrast(monitor_id, value) => return self.set_contrast(monitor_id, value),
 
             // -- Input source -----------------------------------------------
-            Message::SelectInputSource(monitor_id, idx) => {
-                return self.select_input_source(monitor_id, idx);
-            }
-            Message::SetInputSource(monitor_id, source) => {
+            Message::SelectInputSource(monitor_id, source) => {
                 return self.set_input_source(monitor_id, source);
             }
 
