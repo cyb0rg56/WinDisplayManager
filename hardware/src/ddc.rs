@@ -250,7 +250,7 @@ pub const STANDARD_POWER_MODES: &[PowerMode] = &[
     PowerMode::Off,
 ];
 
-pub(crate) const NO_SHARED_OPTION_NOTE: &str = "Selected displays do not share this option.";
+pub const NO_SHARED_OPTION_NOTE: &str = "Selected displays do not share this option.";
 
 /// One VCP code from an MCCS capabilities string.
 ///
@@ -268,7 +268,7 @@ pub struct MonitorCapabilities {
 }
 
 impl MonitorCapabilities {
-    pub(crate) fn contains(&self, code: u8) -> bool {
+    pub fn contains(&self, code: u8) -> bool {
         self.features.iter().any(|feature| feature.code == code)
     }
 
@@ -276,7 +276,7 @@ impl MonitorCapabilities {
     ///
     /// `None` means the code is absent or present without a value list.
     /// Check [`Self::contains`] to tell those cases apart.
-    pub(crate) fn discrete_values(&self, code: u8) -> Option<&[u16]> {
+    pub fn discrete_values(&self, code: u8) -> Option<&[u16]> {
         self.features
             .iter()
             .find(|feature| feature.code == code)
@@ -286,7 +286,7 @@ impl MonitorCapabilities {
 
 /// Dropdown contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FeatureOptions<T> {
+pub struct FeatureOptions<T> {
     pub options: Vec<T>,
     /// Selected monitors advertise no value in common. `options` is only the saved value.
     pub no_shared_option: bool,
@@ -419,7 +419,7 @@ fn vcp_tokens(section: &str) -> Vec<VcpToken> {
 ///
 /// `None` uses the standard HDMI, DisplayPort, and USB-C list. The current
 /// source is appended when it is not already present.
-pub(crate) fn input_choices(
+pub fn input_choices(
     advertised: Option<&[InputSource]>,
     current: Option<InputSource>,
 ) -> FeatureOptions<InputSource> {
@@ -436,7 +436,7 @@ pub(crate) fn input_choices(
 /// Inputs shared by the selected monitors.
 ///
 /// A `None` list contributes the standard sources and does not shrink the result.
-pub(crate) fn shared_input_choices(
+pub fn shared_input_choices(
     advertised: &[Option<Vec<InputSource>>],
     current: Option<InputSource>,
 ) -> FeatureOptions<InputSource> {
@@ -464,7 +464,7 @@ pub(crate) fn shared_input_choices(
 }
 
 /// Standard power modes, plus the current mode when it is not already listed.
-pub(crate) fn power_options(current: Option<PowerMode>) -> FeatureOptions<PowerMode> {
+pub fn power_options(current: Option<PowerMode>) -> FeatureOptions<PowerMode> {
     FeatureOptions {
         options: append_current(STANDARD_POWER_MODES.to_vec(), current),
         no_shared_option: false,
@@ -620,7 +620,7 @@ fn resolve_endpoint<'a, M>(
 }
 
 /// Narrow transport seam used by both real operations and deterministic tests.
-pub(crate) trait Vcp {
+pub trait Vcp {
     fn read(&mut self, code: u8) -> Result<(u16, u16)>;
     fn write(&mut self, code: u8, value: u16) -> Result<()>;
     fn capabilities(&mut self) -> Result<String> {
@@ -691,7 +691,7 @@ fn validate_targets_in<M>(endpoints: &mut [Endpoint<M>], keys: &[MonitorKey]) ->
 }
 
 /// Job-local ownership: raw handles never cross a task/thread boundary.
-pub(crate) struct Session<M = Monitor> {
+pub struct Session<M = Monitor> {
     endpoints: Vec<Endpoint<M>>,
 }
 
@@ -786,7 +786,7 @@ fn advertised_input_sources(raw: &str) -> Option<Vec<InputSource>> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn decode_input_source(raw_value: u16) -> InputSource {
+pub fn decode_input_source(raw_value: u16) -> InputSource {
     // MCCS 2.2a, Table 8-13: scalar VCP 0x60 uses SL; SH/MH/ML are reserved.
     // https://milek7.pl/ddcbacklight/mccs.pdf#page=81
     // The transport packs SH/SL into value(), so decode only SL for this feature.
@@ -805,15 +805,15 @@ fn scalar_reading(result: std::result::Result<(u16, u16), String>) -> (u16, u16,
     (0, 100, Some(error))
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util {
     use super::*;
 
-    pub(crate) fn key(id: u32) -> MonitorKey {
+    pub fn key(id: u32) -> MonitorKey {
         MonitorKey::from_device_path(&format!(r"\\?\DISPLAY#model#{id}")).unwrap()
     }
 
-    pub(crate) fn monitor_state() -> MonitorState {
+    pub fn monitor_state() -> MonitorState {
         MonitorState {
             info: MonitorInfo {
                 id: 1,
@@ -838,11 +838,11 @@ pub(crate) mod tests {
     }
 
     #[derive(Clone, Default)]
-    pub(crate) struct FakeVcp {
-        reading: (u16, u16),
-        fail_read: bool,
-        reads: Vec<u8>,
-        pub(crate) writes: std::rc::Rc<std::cell::RefCell<Vec<(u8, u16)>>>,
+    pub struct FakeVcp {
+        pub reading: (u16, u16),
+        pub fail_read: bool,
+        pub reads: Vec<u8>,
+        pub writes: std::rc::Rc<std::cell::RefCell<Vec<(u8, u16)>>>,
     }
 
     impl Vcp for FakeVcp {
@@ -859,7 +859,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn fake_session(
+    pub fn fake_session(
         monitors: &[(MonitorInfo, FakeVcp)],
         required: &[MonitorKey],
     ) -> Result<Session<FakeVcp>> {
@@ -874,6 +874,12 @@ pub(crate) mod tests {
             required,
         )
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_util::*;
+    use super::*;
 
     fn endpoint(id: u32) -> Endpoint<FakeVcp> {
         let mut info = monitor_state().info;

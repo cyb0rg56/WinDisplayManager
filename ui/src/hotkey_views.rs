@@ -1,21 +1,20 @@
-use super::hotkey_editor::{
-    action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
-};
-use super::{AppModel, Message, RecordingState};
-use crate::config::{
-    ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyHeading, MonitorTarget,
-    hotkey_headings,
-};
-use crate::ddc::{
-    FeatureOptions, InputSource, MonitorInfo, NO_SHARED_OPTION_NOTE, input_choices, power_options,
-    shared_input_choices,
-};
 use crate::icons::{self, AppIcon};
+use crate::{AppModel, Message};
 use cosmic::Element;
 use cosmic::iced::alignment::Horizontal;
 use cosmic::iced::{Alignment, Length};
 use cosmic::theme;
 use cosmic::widget;
+use data::config::{
+    ActionTarget, ActionType, Hotkey, HotkeyActionSpec, HotkeyHeading, MonitorTarget,
+    hotkey_headings,
+};
+use data::ddc::{
+    FeatureOptions, NO_SHARED_OPTION_NOTE, input_choices, power_options, shared_input_choices,
+};
+use data::state::{
+    Input, action_master_selected, action_monitor_selected, parse_value_draft, parse_vcp_draft,
+};
 
 fn option_picker<T>(
     choices: FeatureOptions<T>,
@@ -43,43 +42,20 @@ where
 }
 
 impl AppModel {
-    fn targeted_advertised_inputs(
-        &self,
-        action: &HotkeyActionSpec,
-    ) -> Vec<Option<Vec<InputSource>>> {
-        let infos: Vec<MonitorInfo> = if action.all_monitors {
-            self.detected_monitors.clone()
-        } else {
-            action
-                .explicit_targets()
-                .iter()
-                .filter_map(|target| target.resolve(&self.detected_monitors).ok().cloned())
-                .collect()
-        };
-        infos
-            .iter()
-            .filter_map(|info| {
-                self.monitors
-                    .iter()
-                    .find(|monitor| monitor.info.key == info.key)
-                    .map(|monitor| monitor.advertised_inputs.clone())
-            })
-            .collect()
-    }
-
     pub(super) fn view_hotkeys_current(&self) -> Element<'_, Message> {
         let space_s = cosmic::theme::spacing().space_s;
-        let mut hotkeys = widget::column::with_capacity(self.config.hotkeys.hotkeys.len() + 1)
+        let hotkey_list = &self.state.config().hotkeys.hotkeys;
+        let mut hotkeys = widget::column::with_capacity(hotkey_list.len() + 1)
             .spacing(space_s)
             .width(Length::Fill);
 
-        let headings = hotkey_headings(&self.config.hotkeys.hotkeys);
-        for (hotkey, heading) in self.config.hotkeys.hotkeys.iter().zip(headings) {
+        let headings = hotkey_headings(hotkey_list);
+        for (hotkey, heading) in hotkey_list.iter().zip(headings) {
             hotkeys = hotkeys.push(self.view_hotkey_card(hotkey, heading, space_s));
         }
 
         let add_row = widget::row::with_capacity(2)
-            .push(widget::button::suggested("Add Hotkey").on_press(Message::AddHotkey))
+            .push(widget::button::suggested("Add Hotkey").on_press(Message::Data(Input::AddHotkey)))
             .push(widget::Space::new().width(Length::Fill))
             .spacing(space_s);
 
@@ -110,8 +86,8 @@ impl AppModel {
         space_s: u16,
     ) -> Element<'a, Message> {
         let id = hotkey.id.clone();
-        let expanded = self.expanded_hotkey.as_deref() == Some(id.as_str());
-        let active = self.hotkey_status.get(&id).copied().unwrap_or(false);
+        let expanded = self.state.is_expanded(&id);
+        let active = self.state.is_hotkey_active(&id);
         let status = if hotkey.binding.key.is_empty() {
             "Unbound"
         } else if active {
@@ -130,13 +106,13 @@ impl AppModel {
                 },
                 if expanded { "Collapse" } else { "Edit" },
                 theme::Button::Standard,
-                Message::ToggleHotkeyEditor(id.clone()),
+                Message::Data(Input::ToggleHotkeyEditor(id.clone())),
             ))
             .push(icons::icon_button(
                 AppIcon::Trash,
                 "Delete",
                 theme::Button::Destructive,
-                Message::RequestDeleteHotkey(id.clone()),
+                Message::Data(Input::RequestDeleteHotkey(id.clone())),
             ))
             .spacing(space_s)
             .align_y(Alignment::Center);
@@ -145,23 +121,23 @@ impl AppModel {
             .push(summary)
             .spacing(space_s);
         if expanded {
-            let recording_here = matches!(
-                &self.recording_state,
-                RecordingState::Recording { hotkey_id, .. } if hotkey_id == &id
-            );
+            let recording_here = self.state.is_recording_hotkey(&id);
             let binding_row = if recording_here {
                 widget::row::with_capacity(2)
                     .push(widget::text::body("Press a key combination...").width(Length::Fill))
-                    .push(widget::button::standard("Cancel").on_press(Message::CancelRecording))
+                    .push(
+                        widget::button::standard("Cancel")
+                            .on_press(Message::Data(Input::CancelRecording)),
+                    )
             } else {
                 widget::row::with_capacity(3)
                     .push(
                         widget::button::standard("Record")
-                            .on_press(Message::StartRecording(id.clone())),
+                            .on_press(Message::Data(Input::StartRecording(id.clone()))),
                     )
                     .push(
                         widget::button::standard("Clear")
-                            .on_press(Message::ClearBinding(id.clone())),
+                            .on_press(Message::Data(Input::ClearBinding(id.clone()))),
                     )
                     .push(widget::Space::new().width(Length::Fill))
             }
@@ -173,7 +149,7 @@ impl AppModel {
                     widget::text_input(heading.fallback, &hotkey.label)
                         .on_input({
                             let id = id.clone();
-                            move |value| Message::SetHotkeyLabel(id.clone(), value)
+                            move |value| Message::Data(Input::SetHotkeyLabel(id.clone(), value))
                         })
                         .width(Length::Fill),
                 )
@@ -186,7 +162,8 @@ impl AppModel {
                 content = content.push(self.view_action_editor(&id, idx, action, space_s));
             }
             content = content.push(
-                widget::button::standard("Add Action").on_press(Message::AddAction(id.clone())),
+                widget::button::standard("Add Action")
+                    .on_press(Message::Data(Input::AddAction(id.clone()))),
             );
         }
 
@@ -216,14 +193,20 @@ impl AppModel {
         let action_row = widget::row::with_capacity(3)
             .push(widget::dropdown(type_labels, selected_type, {
                 let id = id.clone();
-                move |selected| Message::SetActionType(id.clone(), idx, type_options[selected])
+                move |selected| {
+                    Message::Data(Input::SetActionType(
+                        id.clone(),
+                        idx,
+                        type_options[selected],
+                    ))
+                }
             }))
             .push(widget::Space::new().width(Length::Fill))
             .push(icons::icon_button(
                 AppIcon::Trash,
                 "Delete Action",
                 theme::Button::Destructive,
-                Message::DeleteAction(id.clone(), idx),
+                Message::Data(Input::DeleteAction(id.clone(), idx)),
             ))
             .spacing(space_s)
             .align_y(Alignment::Center);
@@ -256,11 +239,11 @@ impl AppModel {
                         widget::container(widget::dropdown(targets, selected, {
                             let id = id.clone();
                             move |selected| {
-                                Message::SetActionTarget(
+                                Message::Data(Input::SetActionTarget(
                                     id.clone(),
                                     idx,
                                     ActionTarget::ALL[selected],
-                                )
+                                ))
                             }
                         }))
                         .width(Length::Fill)
@@ -271,16 +254,14 @@ impl AppModel {
             );
 
             if action.target == ActionTarget::CustomVcp {
-                let draft = self
-                    .vcp_drafts
-                    .get(&(id.clone(), idx))
-                    .map(String::as_str)
-                    .unwrap_or("");
+                let draft = self.state.vcp_draft(&id, idx);
                 let mut code = widget::column::with_capacity(2).push(
                     widget::text_input("0x10", draft)
                         .on_input({
                             let id = id.clone();
-                            move |value| Message::ActionVcpDraftChanged(id.clone(), idx, value)
+                            move |value| {
+                                Message::Data(Input::ActionVcpDraftChanged(id.clone(), idx, value))
+                            }
                         })
                         .width(Length::Fixed(96.0)),
                 );
@@ -302,17 +283,17 @@ impl AppModel {
 
             let value_control: Option<Element<'_, Message>> = match action.target {
                 ActionTarget::Brightness | ActionTarget::Contrast | ActionTarget::CustomVcp => {
-                    let draft = self
-                        .value_drafts
-                        .get(&(id.clone(), idx))
-                        .map(String::as_str)
-                        .unwrap_or("");
+                    let draft = self.state.value_draft(&id, idx);
                     let mut input = widget::column::with_capacity(2).push(
                         widget::text_input("0", draft)
                             .on_input({
                                 let id = id.clone();
                                 move |value| {
-                                    Message::ActionValueDraftChanged(id.clone(), idx, value)
+                                    Message::Data(Input::ActionValueDraftChanged(
+                                        id.clone(),
+                                        idx,
+                                        value,
+                                    ))
                                 }
                             })
                             .width(Length::Fixed(96.0)),
@@ -324,23 +305,23 @@ impl AppModel {
                 }
                 ActionTarget::InputSource if action.all_monitors => {
                     let choices = shared_input_choices(
-                        &self.targeted_advertised_inputs(action),
+                        &self.state.targeted_advertised_inputs(action),
                         Some(action.input_source),
                     );
                     let id = id.clone();
                     Some(option_picker(choices, action.input_source, move |source| {
-                        Message::SetActionInputSource(id.clone(), idx, source)
+                        Message::Data(Input::SetActionInputSource(id.clone(), idx, source))
                     }))
                 }
                 ActionTarget::PowerMode => {
                     let choices = power_options(Some(action.power_mode));
                     let id = id.clone();
                     Some(option_picker(choices, action.power_mode, move |mode| {
-                        Message::SetActionPowerMode(id.clone(), idx, mode)
+                        Message::Data(Input::SetActionPowerMode(id.clone(), idx, mode))
                     }))
                 }
                 ActionTarget::Profile => {
-                    let mut profiles = self.profiles.clone();
+                    let mut profiles = self.state.profiles().to_vec();
                     if !action.profile_name.is_empty() && !profiles.contains(&action.profile_name) {
                         profiles.push(action.profile_name.clone());
                     }
@@ -354,11 +335,11 @@ impl AppModel {
                             widget::dropdown(profiles.clone(), selected, {
                                 let id = id.clone();
                                 move |selected| {
-                                    Message::SetActionProfile(
+                                    Message::Data(Input::SetActionProfile(
                                         id.clone(),
                                         idx,
                                         profiles[selected].clone(),
-                                    )
+                                    ))
                                 }
                             })
                             .into(),
@@ -382,8 +363,8 @@ impl AppModel {
             }
         }
 
-        let mut display_ids: Vec<MonitorTarget> = self
-            .detected_monitors
+        let detected = self.state.detected_monitors();
+        let mut display_ids: Vec<MonitorTarget> = detected
             .iter()
             .map(|monitor| MonitorTarget::Stable(monitor.key.clone()))
             .collect();
@@ -409,13 +390,15 @@ impl AppModel {
                     .push(widget::Space::new().width(Length::Fixed(space_s as f32)))
                     .push(widget::toggler(master_selected).on_toggle({
                         let id = id.clone();
-                        move |checked| Message::ToggleActionAllMonitors(id.clone(), idx, checked)
+                        move |checked| {
+                            Message::Data(Input::ToggleActionAllMonitors(id.clone(), idx, checked))
+                        }
                     }))
                     .align_y(Alignment::Center),
             );
 
             for monitor_id in display_ids {
-                let available = monitor_id.resolve(&self.detected_monitors).ok();
+                let available = monitor_id.resolve(detected).ok();
                 let label = available
                     .map(|monitor| format!("Monitor {}: {}", monitor.id, monitor.name))
                     .unwrap_or_else(|| format!("{monitor_id} (unresolved)"));
@@ -428,44 +411,39 @@ impl AppModel {
                                 let id = id.clone();
                                 let target = monitor_id.clone();
                                 move |checked| {
-                                    Message::ToggleActionMonitor(
+                                    Message::Data(Input::ToggleActionMonitor(
                                         id.clone(),
                                         idx,
                                         target.clone(),
                                         checked,
-                                    )
+                                    ))
                                 }
                             }))
                             .align_y(Alignment::Center),
                     );
                 } else {
-                    let labels: Vec<String> = self
-                        .detected_monitors
+                    let labels: Vec<String> = detected
                         .iter()
                         .map(|m| format!("Rebind to Monitor {}: {}", m.id, m.name))
                         .collect();
-                    let keys: Vec<_> = self
-                        .detected_monitors
-                        .iter()
-                        .map(|m| m.key.clone())
-                        .collect();
+                    let keys: Vec<_> = detected.iter().map(|m| m.key.clone()).collect();
                     let mut row = widget::row::with_capacity(3)
                         .push(widget::text::body(label).width(Length::Fill))
-                        .push(widget::button::standard("Remove").on_press(
-                            Message::RemoveMonitorTarget(id.clone(), idx, monitor_id.clone()),
-                        ))
+                        .push(widget::button::standard("Remove").on_press(Message::Data(
+                            Input::RemoveMonitorTarget(id.clone(), idx, monitor_id.clone()),
+                        )))
                         .spacing(space_s);
                     if !keys.is_empty() {
                         row = row.push(widget::dropdown(labels, None, {
                             let id = id.clone();
                             let old = monitor_id.clone();
                             move |selected| {
-                                Message::RebindMonitorTarget(
+                                Message::Data(Input::RebindMonitorTarget(
                                     id.clone(),
                                     idx,
                                     old.clone(),
                                     keys[selected].clone(),
-                                )
+                                ))
                             }
                         }));
                     }
@@ -484,9 +462,7 @@ impl AppModel {
                         .map(|input| input.input_source)
                         .unwrap_or(action.input_source);
                     let key = available.map(|info| info.key.clone());
-                    let monitor = key.and_then(|key| {
-                        self.monitors.iter().find(|monitor| monitor.info.key == key)
-                    });
+                    let monitor = key.and_then(|key| self.state.monitor_state(&key));
                     let choices = input_choices(
                         monitor.and_then(|monitor| monitor.advertised_inputs.as_deref()),
                         Some(current),
@@ -498,12 +474,12 @@ impl AppModel {
                                 let id = id.clone();
                                 let target = monitor_id.clone();
                                 move |source| {
-                                    Message::SetMonitorInput(
+                                    Message::Data(Input::SetMonitorInput(
                                         id.clone(),
                                         idx,
                                         target.clone(),
                                         Some(source),
-                                    )
+                                    ))
                                 }
                             }))
                             .spacing(space_s)

@@ -1,0 +1,20 @@
+[package]
+name = "hardware"
+description = "CCD display layout and DDC/CI monitor access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+test-util = []
+
+[dependencies]
+ddc.workspace = true
+ddc-winapi.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+log.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

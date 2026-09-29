@@ -1131,7 +1131,7 @@ mod tests {
         let path = dir.0.join("config.json");
         let mut config = AppConfig::default();
         let mut hotkey = Hotkey::new_empty();
-        let key = crate::ddc::tests::key(1);
+        let key = crate::ddc::test_util::key(1);
         let unknown: MonitorTarget = serde_json::from_str("\"future-monitor:v2:abc\"").unwrap();
         hotkey.actions[0] = HotkeyActionSpec {
             target: ActionTarget::InputSource,
@@ -1171,7 +1171,7 @@ mod tests {
         assert_eq!(action.monitor_inputs[0].input_source, InputSource::Hdmi2);
         assert!(
             action
-                .resolve_monitors(&[crate::ddc::tests::monitor_state().info])
+                .resolve_monitors(&[crate::ddc::test_util::monitor_state().info])
                 .is_err()
         );
     }
@@ -1194,7 +1194,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let live = crate::ddc::tests::monitor_state().info;
+        let live = crate::ddc::test_util::monitor_state().info;
         assert!(
             action
                 .resolve_monitors(std::slice::from_ref(&live))
@@ -1219,14 +1219,14 @@ mod tests {
 
     #[test]
     fn whole_action_resolution_rejects_legacy_missing_duplicate_and_empty_targets_including_off() {
-        let live = crate::ddc::tests::monitor_state().info;
+        let live = crate::ddc::test_util::monitor_state().info;
         let stable = MonitorTarget::Stable(live.key.clone());
         for action_type in [ActionType::Set, ActionType::Offset, ActionType::Off] {
             for targets in [
                 vec![stable.clone(), 1.into()],
                 vec![
                     stable.clone(),
-                    MonitorTarget::Stable(crate::ddc::tests::key(2)),
+                    MonitorTarget::Stable(crate::ddc::test_util::key(2)),
                 ],
                 vec![stable.clone(), stable.clone()],
                 Vec::new(),
@@ -1261,7 +1261,7 @@ mod tests {
 
     #[test]
     fn explicit_resolution_uses_keys_after_numbers_change() {
-        let mut live = crate::ddc::tests::monitor_state().info;
+        let mut live = crate::ddc::test_util::monitor_state().info;
         let action = HotkeyActionSpec {
             all_monitors: false,
             monitors: vec![MonitorTarget::Stable(live.key.clone())],

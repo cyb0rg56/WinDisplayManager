@@ -1,0 +1,23 @@
+[package]
+name = "data"
+description = "Application state and logic for Windows Display Manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hardware.workspace = true
+global-hotkey.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+log.workspace = true
+tray-icon.workspace = true
+winreg.workspace = true
+anyhow.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+hardware = { workspace = true, features = ["test-util"] }

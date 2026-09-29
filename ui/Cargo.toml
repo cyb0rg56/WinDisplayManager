@@ -1,0 +1,12 @@
+[package]
+name = "ui"
+description = "libcosmic user interface for Windows Display Manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+data.workspace = true
+libcosmic.workspace = true
+tokio.workspace = true
+log.workspace = true

@@ -492,7 +492,7 @@ impl<Job> ActionExecutor<Job> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ddc::tests::{FakeVcp, fake_session, key, monitor_state};
+    use crate::ddc::test_util::{FakeVcp, fake_session, key, monitor_state};
 
     #[derive(Default)]
     struct FakeHardware {

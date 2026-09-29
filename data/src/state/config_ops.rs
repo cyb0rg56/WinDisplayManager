@@ -1,10 +1,10 @@
-use super::{AppModel, Message};
+use super::{AppState, Effect, Job, JobKind};
 use crate::config::{AppConfig, ConfigStore};
 use crate::persistence::LoadOutcome;
 use crate::startup;
 
 /// Config and registry writes run one at a time off the UI thread. Each
-/// operation reads `AppModel::config` when it starts, not when requested.
+/// operation reads `AppState::config` when it starts, not when requested.
 #[derive(Clone, Debug)]
 pub enum ConfigOp {
     Save,
@@ -23,7 +23,16 @@ pub struct ConfigOpDone {
     outcome: Result<Option<AppConfig>, String>,
 }
 
-fn run(op: &ConfigOp, mut store: ConfigStore, mut config: AppConfig) -> ConfigOpDone {
+impl ConfigOpDone {
+    pub(super) fn join_failed(error: String) -> Self {
+        Self {
+            store: None,
+            outcome: Err(format!("Task join error: {error}")),
+        }
+    }
+}
+
+pub(super) fn run(op: &ConfigOp, mut store: ConfigStore, mut config: AppConfig) -> ConfigOpDone {
     let outcome = match *op {
         ConfigOp::Save => store
             .save(&config)
@@ -77,44 +86,29 @@ fn set_startup(
     })
 }
 
-impl AppModel {
-    pub(super) fn enqueue_config_op(&mut self, op: ConfigOp) -> cosmic::app::Task<Message> {
+impl AppState {
+    pub(super) fn enqueue_config_op(&mut self, op: ConfigOp) {
         self.config_ops.push_back(op);
-        self.start_next_config_op()
+        self.start_next_config_op();
     }
 
-    fn start_next_config_op(&mut self) -> cosmic::app::Task<Message> {
+    fn start_next_config_op(&mut self) {
         if self.config_op_active {
-            return cosmic::app::Task::none();
+            return;
         }
         let Some(op) = self.config_ops.pop_front() else {
-            return cosmic::app::Task::none();
+            return;
         };
         self.config_op_active = true;
         if matches!(op, ConfigOp::Save) {
             // Edits made while the save is in flight mark the config dirty again.
             self.config_dirty = false;
         }
-        let store = self.config_store.clone();
-        let config = self.config.clone();
-        let task_op = op.clone();
-        cosmic::app::Task::perform(
-            async move { tokio::task::spawn_blocking(move || run(&task_op, store, config)).await },
-            move |result| {
-                let done = result.unwrap_or_else(|error| ConfigOpDone {
-                    store: None,
-                    outcome: Err(format!("Task join error: {error}")),
-                });
-                cosmic::Action::App(Message::ConfigOpFinished(op.clone(), done))
-            },
-        )
+        let job = JobKind::Config(op, self.config_store.clone(), self.config.clone());
+        self.emit(Effect::Spawn(Job(job)));
     }
 
-    pub(super) fn config_op_finished(
-        &mut self,
-        op: ConfigOp,
-        done: ConfigOpDone,
-    ) -> cosmic::app::Task<Message> {
+    pub(super) fn config_op_finished(&mut self, op: ConfigOp, done: ConfigOpDone) {
         self.config_op_active = false;
         if let Some(store) = done.store {
             self.config_store = store;
@@ -166,6 +160,11 @@ impl AppModel {
             ),
             (ConfigOp::RecoverBackup | ConfigOp::Reset, Ok(None)) => {}
         }
-        self.start_next_config_op()
+        self.start_next_config_op();
+    }
+
+    /// Persist startup settings and keep the per-user Run key in step.
+    pub(super) fn set_windows_startup(&mut self, enabled: bool, minimized: bool) {
+        self.enqueue_config_op(ConfigOp::SetStartup { enabled, minimized });
     }
 }

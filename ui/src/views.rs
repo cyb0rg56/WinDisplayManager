@@ -1,7 +1,8 @@
-use super::{AppModel, Message};
+use crate::{AppModel, Message};
 use cosmic::Element;
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget;
+use data::state::Input;
 
 impl AppModel {
     pub(super) fn view_about(&self) -> Element<'_, Message> {
@@ -11,7 +12,7 @@ impl AppModel {
             .push(
                 widget::row::with_capacity(2)
                     .push(
-                        widget::text_input("", &self.config_path)
+                        widget::text_input("", self.state.config_path())
                             .on_input(|_| Message::ConfigPathInput)
                             .width(Length::Fill),
                     )
@@ -35,26 +36,23 @@ impl AppModel {
     }
 
     pub(super) fn view_config_recovery(&self) -> Element<'_, Message> {
-        let error = self
-            .config_store
-            .recovery_error()
-            .unwrap_or("Unknown load error");
+        let error = self.state.recovery_error().unwrap_or("Unknown load error");
         let mut content = widget::column::with_capacity(6)
             .push(widget::text::title3("Configuration recovery required"))
-            .push(widget::text::body(format!("{}: {error}", self.config_store.path().display())))
+            .push(widget::text::body(format!("{}: {error}", self.state.store_path().display())))
             .push(widget::text::body("The file has not been replaced. Configuration edits, saves, and hotkeys are blocked until recovery."))
             .push(widget::row::with_capacity(3)
-                .push(widget::button::standard("Retry loading").on_press(Message::RetryConfig))
-                .push(widget::button::standard("Recover backup").on_press(Message::RecoverConfigBackup))
-                .push(widget::button::standard("Reset to defaults...").on_press(Message::RequestResetConfig))
+                .push(widget::button::standard("Retry loading").on_press(Message::Data(Input::RetryConfig)))
+                .push(widget::button::standard("Recover backup").on_press(Message::Data(Input::RecoverConfigBackup)))
+                .push(widget::button::standard("Reset to defaults...").on_press(Message::Data(Input::RequestResetConfig)))
                 .spacing(8))
             .spacing(8);
-        if self.pending_config_reset {
+        if self.state.pending_config_reset() {
             content = content
                 .push(widget::text::body("Discard the configuration file and write defaults? This cannot be undone. Any existing backup will be kept."))
                 .push(widget::row::with_capacity(2)
-                    .push(widget::button::destructive("Confirm reset").on_press(Message::ConfirmResetConfig))
-                    .push(widget::button::standard("Cancel").on_press(Message::CancelResetConfig))
+                    .push(widget::button::destructive("Confirm reset").on_press(Message::Data(Input::ConfirmResetConfig)))
+                    .push(widget::button::standard("Cancel").on_press(Message::Data(Input::CancelResetConfig)))
                     .spacing(8));
         }
         widget::container(content)

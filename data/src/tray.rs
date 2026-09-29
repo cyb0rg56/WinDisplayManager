@@ -2,12 +2,6 @@
 //!
 //! Provides a tray icon with menu options to show the window or exit the application.
 
-use cosmic::iced::{
-    Subscription,
-    futures::{SinkExt, Stream},
-    stream,
-};
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tray_icon::{
@@ -30,7 +24,7 @@ pub enum TrayMessage {
     Exit,
 }
 
-/// Async stream wrapper for receiving tray messages.
+/// Async receiver for tray messages, shared so a restarted listener can resume.
 #[derive(Clone)]
 pub struct TrayStream {
     receiver: Arc<Mutex<mpsc::UnboundedReceiver<TrayMessage>>>,
@@ -159,42 +153,9 @@ impl SystemTray {
 }
 
 impl TrayStream {
-    /// Build an iced `Subscription` that yields tray messages.
-    pub fn subscription(self) -> Subscription<TrayMessage> {
-        Subscription::run_with(TrayId(self), |data| {
-            data.0.clone().into_subscription_stream()
-        })
-    }
-
-    /// Convert this into an async stream suitable for iced subscriptions.
-    pub fn into_subscription_stream(self) -> impl Stream<Item = TrayMessage> {
-        let receiver_arc = self.receiver.clone();
-
-        stream::channel(
-            1,
-            |mut sender: cosmic::iced::futures::channel::mpsc::Sender<TrayMessage>| async move {
-                loop {
-                    let mut receiver = receiver_arc.lock().await;
-                    if let Some(msg) = receiver.recv().await {
-                        if sender.send(msg).await.is_err() {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-            },
-        )
-    }
-}
-
-/// Identity wrapper so a `TrayStream` can be used as `Subscription` data.
-/// There is only ever one tray, so the identity is constant.
-struct TrayId(TrayStream);
-
-impl Hash for TrayId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        "system-tray".hash(state);
+    /// Next tray message; `None` once the tray is gone.
+    pub async fn recv(&self) -> Option<TrayMessage> {
+        self.receiver.lock().await.recv().await
     }
 }
 

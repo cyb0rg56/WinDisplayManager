@@ -1,4 +1,4 @@
-use super::actions::{self, ActionExecutor, HardwareJob, HardwareOutcome, PreparedJob};
+use crate::actions::{self, ActionExecutor, HardwareJob, HardwareOutcome, PreparedJob};
 use crate::config::{HotkeyActionSpec, MonitorTarget, TurnOffBehavior};
 use crate::ddc::{self, MonitorInfo, MonitorKey, MonitorState};
 use std::collections::HashMap;
@@ -357,7 +357,7 @@ impl HardwareCoordinator {
 mod tests {
     use super::*;
     use crate::config::ActionTarget;
-    use crate::ddc::tests::{FakeVcp, fake_session, key, monitor_state};
+    use crate::ddc::test_util::{FakeVcp, fake_session, key, monitor_state};
     use crate::ddc::{InputSource, VCP_BRIGHTNESS, VCP_CONTRAST, VCP_INPUT_SOURCE};
     use std::collections::VecDeque;
 

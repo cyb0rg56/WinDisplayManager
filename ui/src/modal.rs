@@ -1,4 +1,4 @@
-use super::Message;
+use crate::Message;
 use cosmic::Element;
 use cosmic::iced::widget::{center, container, mouse_area, opaque};
 use cosmic::iced::{Color, Length};
