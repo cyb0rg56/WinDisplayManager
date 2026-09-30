@@ -15,16 +15,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "windisplaymanager_rs"
-path = "src/main.rs"
-
 [profile.release]
 strip = true
 lto = "thin"
 
 [build-dependencies]
-winres = "0.1"
+winresource = "0.1"
 
 [dependencies]
 data.workspace = true

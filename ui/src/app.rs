@@ -274,6 +274,7 @@ impl cosmic::Application for AppModel {
                         } else {
                             // Window was closed — open a new one
                             let (new_id, open_task) = window::open(window::Settings {
+                                size: cosmic::iced::Size::new(1920.0, 1080.0),
                                 min_size: Some(cosmic::iced::Size::new(600.0, 400.0)),
                                 decorations: false,
                                 ..window::Settings::default()
