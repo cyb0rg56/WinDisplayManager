@@ -42,7 +42,8 @@ serde_json = "1.0"
 dirs = "6.0"
 log = "0.4"
 env_logger = "0.11"
-tray-icon = "0.25"
+# Windows tray only. Default features pull libappindicator -> gtk 0.18 -> glib < 0.20 (GHSA-wrw7-89jp-8q8g).
+tray-icon = { version = "0.25", default-features = false }
 winreg = "0.55"
 anyhow = "1"
 windows-sys = { version = "0.61", features = [
